@@ -7,20 +7,20 @@ const { JWT_SECRET, authMiddleware } = require('../middleware/auth');
 
 // POST /api/auth/login
 router.post('/login', async (req, res) => {
-  const { username, password } = req.body;
-  if (!username || !password) {
-    return res.status(400).json({ message: 'Username and password are required' });
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ message: 'Email and password are required' });
   }
 
   const users = readTable('users');
-  const user = users.find(u => u.username.toLowerCase() === username.toLowerCase());
+  const user = users.find(u => u.email && u.email.toLowerCase() === email.toLowerCase());
   if (!user) {
-    return res.status(401).json({ message: 'Invalid username or password' });
+    return res.status(401).json({ message: 'Invalid email or password' });
   }
 
   const isMatch = await bcrypt.compare(password, user.password);
   if (!isMatch) {
-    return res.status(401).json({ message: 'Invalid username or password' });
+    return res.status(401).json({ message: 'Invalid email or password' });
   }
 
   const token = jwt.sign(
@@ -34,6 +34,7 @@ router.post('/login', async (req, res) => {
     user: {
       id: user.id,
       username: user.username,
+      email: user.email,
       name: user.name,
       role: user.role,
       avatar: user.avatar

@@ -50,6 +50,7 @@ const seedDatabase = async () => {
       {
         id: '1',
         username: 'admin',
+        email: 'admin@trustassure.com',
         password: hashedPassword,
         name: 'John Doe',
         role: 'Senior Broker',
@@ -58,6 +59,7 @@ const seedDatabase = async () => {
       {
         id: '2',
         username: 'alex',
+        email: 'alex@trustassure.com',
         password: hashedPassword,
         name: 'Alex Sterling',
         role: 'Senior Broker',
