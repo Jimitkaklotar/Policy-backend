@@ -75,16 +75,23 @@ router.get('/:id', authMiddleware, (req, res) => {
 });
 
 // POST /api/policies
-router.post('/', authMiddleware, (req, res) => {
+router.post('/', authMiddleware, upload.single('file'), (req, res) => {
   const { clientId, type, premiumAmount, sumAssured, expiryDate, status, description } = req.body;
   
   if (!clientId || !type || !premiumAmount || !sumAssured || !expiryDate) {
+    // If file was uploaded but validation fails, clean up the file
+    if (req.file) {
+      try { fs.unlinkSync(req.file.path); } catch (e) {}
+    }
     return res.status(400).json({ message: 'Required fields: clientId, type, premiumAmount, sumAssured, expiryDate' });
   }
 
   const clients = readTable('clients');
   const client = clients.find(c => c.id === clientId);
   if (!client) {
+    if (req.file) {
+      try { fs.unlinkSync(req.file.path); } catch (e) {}
+    }
     return res.status(404).json({ message: 'Client not found' });
   }
 
@@ -107,6 +114,32 @@ router.post('/', authMiddleware, (req, res) => {
   policies.push(newPolicy);
   writeTable('policies', policies);
 
+  // If a file is uploaded, add it to documents vault linked to this policy
+  if (req.file) {
+    const documents = readTable('documents');
+    const bytes = req.file.size;
+    let formattedSize = '0 Bytes';
+    if (bytes > 0) {
+      const k = 1024;
+      const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+      const i = Math.floor(Math.log(bytes) / Math.log(k));
+      formattedSize = parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+
+    const newDoc = {
+      id: 'doc-' + uuidv4(),
+      policyId: newPolicy.id,
+      clientId: newPolicy.clientId,
+      documentName: 'Policy Schedule PDF',
+      documentType: 'Policy Schedule',
+      filePath: `uploads/${req.file.filename}`,
+      fileSize: formattedSize,
+      uploadedAt: new Date().toISOString()
+    };
+    documents.push(newDoc);
+    writeTable('documents', documents);
+  }
+
   // Update client's active policy count
   if (newPolicy.status === 'Active') {
     client.activePoliciesCount = (client.activePoliciesCount || 0) + 1;
@@ -117,7 +150,7 @@ router.post('/', authMiddleware, (req, res) => {
   const activities = readTable('activities');
   activities.unshift({
     id: 'act-' + uuidv4(),
-    logText: `New ${type} Policy Issued for ${client.name} (Policy: ${newPolicy.policyNumber})`,
+    logText: `New ${type} Policy Issued for ${client.name} (Policy: ${newPolicy.policyNumber})${req.file ? ' with PDF schedule' : ''}`,
     timestamp: new Date().toISOString(),
     type: 'success'
   });
