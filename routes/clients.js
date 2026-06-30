@@ -1,8 +1,27 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const { readTable, writeTable } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
+
+// Multer Storage Configuration
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    cb(null, path.join(__dirname, '../uploads'));
+  },
+  filename: (req, file, cb) => {
+    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    cb(null, file.fieldname + '-' + uniqueSuffix + path.extname(file.originalname));
+  }
+});
+
+const upload = multer({
+  storage: storage,
+  limits: { fileSize: 50 * 1024 * 1024 }
+});
 
 // GET /api/clients
 router.get('/', authMiddleware, (req, res) => {
@@ -40,16 +59,21 @@ router.get('/:id', authMiddleware, (req, res) => {
 });
 
 // POST /api/clients
-router.post('/', authMiddleware, (req, res) => {
+router.post('/', authMiddleware, upload.fields([{ name: 'aadhaar', maxCount: 1 }, { name: 'pan', maxCount: 1 }]), (req, res) => {
   const { name, email, phone, dob, status } = req.body;
   if (!name || !email) {
+    if (req.files) {
+      if (req.files.aadhaar) {
+        try { fs.unlinkSync(req.files.aadhaar[0].path); } catch (e) {}
+      }
+      if (req.files.pan) {
+        try { fs.unlinkSync(req.files.pan[0].path); } catch (e) {}
+      }
+    }
     return res.status(400).json({ message: 'Name and Email are required' });
   }
 
   const clients = readTable('clients');
-  
-  // Custom default avatars based on initials or general placeholder
-  const initial = name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase();
   const avatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=004DC0&color=fff`;
 
   const newClient = {
@@ -66,6 +90,57 @@ router.post('/', authMiddleware, (req, res) => {
 
   clients.push(newClient);
   writeTable('clients', clients);
+
+  // Handle uploaded files (Aadhaar & PAN)
+  if (req.files) {
+    const documents = readTable('documents');
+
+    if (req.files.aadhaar) {
+      const file = req.files.aadhaar[0];
+      const bytes = file.size;
+      let formattedSize = '0 Bytes';
+      if (bytes > 0) {
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        formattedSize = parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+      }
+      documents.push({
+        id: 'doc-' + uuidv4(),
+        policyId: '', // client level
+        clientId: newClient.id,
+        documentName: 'Aadhaar Card',
+        documentType: 'Aadhaar',
+        filePath: `uploads/${file.filename}`,
+        fileSize: formattedSize,
+        uploadedAt: new Date().toISOString()
+      });
+    }
+
+    if (req.files.pan) {
+      const file = req.files.pan[0];
+      const bytes = file.size;
+      let formattedSize = '0 Bytes';
+      if (bytes > 0) {
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        formattedSize = parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+      }
+      documents.push({
+        id: 'doc-' + uuidv4(),
+        policyId: '', // client level
+        clientId: newClient.id,
+        documentName: 'PAN Card Copy',
+        documentType: 'PAN',
+        filePath: `uploads/${file.filename}`,
+        fileSize: formattedSize,
+        uploadedAt: new Date().toISOString()
+      });
+    }
+
+    writeTable('documents', documents);
+  }
 
   // Log activity
   const activities = readTable('activities');
