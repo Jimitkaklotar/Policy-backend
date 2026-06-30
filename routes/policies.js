@@ -346,6 +346,9 @@ router.delete('/:id/documents/:docId', authMiddleware, (req, res) => {
     }
   }
 
+  res.json({ message: 'Document deleted successfully' });
+});
+
 // GET /api/policies/documents/download/:docId
 router.get('/documents/download/:docId', (req, res) => {
   const documents = readTable('documents');
