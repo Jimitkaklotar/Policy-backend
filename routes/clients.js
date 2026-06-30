@@ -45,7 +45,17 @@ router.get('/', authMiddleware, (req, res) => {
   // Sort by name
   clients.sort((a, b) => a.name.localeCompare(b.name));
 
-  res.json(clients);
+  // Attach documents to each client
+  const documents = readTable('documents');
+  const clientsWithDocs = clients.map(c => {
+    const clientDocs = documents.filter(d => d.clientId === c.id);
+    return {
+      ...c,
+      documents: clientDocs
+    };
+  });
+
+  res.json(clientsWithDocs);
 });
 
 // GET /api/clients/:id
