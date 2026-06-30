@@ -166,10 +166,14 @@ router.post('/', authMiddleware, upload.fields([{ name: 'aadhaar', maxCount: 1 }
 });
 
 // PUT /api/clients/:id
-router.put('/:id', authMiddleware, (req, res) => {
+router.put('/:id', authMiddleware, upload.fields([{ name: 'aadhaar', maxCount: 1 }, { name: 'pan', maxCount: 1 }]), (req, res) => {
   const clients = readTable('clients');
   const idx = clients.findIndex(c => c.id === req.params.id);
   if (idx === -1) {
+    if (req.files) {
+      if (req.files.aadhaar) { try { fs.unlinkSync(req.files.aadhaar[0].path); } catch (e) {} }
+      if (req.files.pan) { try { fs.unlinkSync(req.files.pan[0].path); } catch (e) {} }
+    }
     return res.status(404).json({ message: 'Client not found' });
   }
 
@@ -185,6 +189,95 @@ router.put('/:id', authMiddleware, (req, res) => {
 
   clients[idx] = updatedClient;
   writeTable('clients', clients);
+
+  // Handle uploaded files (Aadhaar & PAN update)
+  if (req.files) {
+    const documents = readTable('documents');
+
+    if (req.files.aadhaar) {
+      const file = req.files.aadhaar[0];
+      const bytes = file.size;
+      let formattedSize = '0 Bytes';
+      if (bytes > 0) {
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        formattedSize = parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+      }
+
+      // Check if Aadhaar already exists
+      const existingDocIdx = documents.findIndex(d => d.clientId === req.params.id && d.documentType === 'Aadhaar');
+      if (existingDocIdx !== -1) {
+        // Delete old file
+        const oldPath = path.join(__dirname, '..', documents[existingDocIdx].filePath);
+        if (fs.existsSync(oldPath)) {
+          try { fs.unlinkSync(oldPath); } catch (e) {}
+        }
+        // Update record
+        documents[existingDocIdx] = {
+          ...documents[existingDocIdx],
+          filePath: `uploads/${file.filename}`,
+          fileSize: formattedSize,
+          uploadedAt: new Date().toISOString()
+        };
+      } else {
+        // Add new record
+        documents.push({
+          id: 'doc-' + uuidv4(),
+          policyId: '',
+          clientId: req.params.id,
+          documentName: 'Aadhaar Card',
+          documentType: 'Aadhaar',
+          filePath: `uploads/${file.filename}`,
+          fileSize: formattedSize,
+          uploadedAt: new Date().toISOString()
+        });
+      }
+    }
+
+    if (req.files.pan) {
+      const file = req.files.pan[0];
+      const bytes = file.size;
+      let formattedSize = '0 Bytes';
+      if (bytes > 0) {
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        formattedSize = parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+      }
+
+      // Check if PAN already exists
+      const existingDocIdx = documents.findIndex(d => d.clientId === req.params.id && d.documentType === 'PAN');
+      if (existingDocIdx !== -1) {
+        // Delete old file
+        const oldPath = path.join(__dirname, '..', documents[existingDocIdx].filePath);
+        if (fs.existsSync(oldPath)) {
+          try { fs.unlinkSync(oldPath); } catch (e) {}
+        }
+        // Update record
+        documents[existingDocIdx] = {
+          ...documents[existingDocIdx],
+          filePath: `uploads/${file.filename}`,
+          fileSize: formattedSize,
+          uploadedAt: new Date().toISOString()
+        };
+      } else {
+        // Add new record
+        documents.push({
+          id: 'doc-' + uuidv4(),
+          policyId: '',
+          clientId: req.params.id,
+          documentName: 'PAN Card Copy',
+          documentType: 'PAN',
+          filePath: `uploads/${file.filename}`,
+          fileSize: formattedSize,
+          uploadedAt: new Date().toISOString()
+        });
+      }
+    }
+
+    writeTable('documents', documents);
+  }
 
   // Log activity
   const activities = readTable('activities');
