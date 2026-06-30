@@ -13,6 +13,17 @@ if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
+// Seed dummy PDF documents for testing
+const dummyFiles = ['policy_schedule_p1.pdf', 'aadhaar_c1.pdf', 'pan_c1.pdf'];
+dummyFiles.forEach(fileName => {
+  const filePath = path.join(UPLOADS_DIR, fileName);
+  if (!fs.existsSync(filePath)) {
+    // Write a valid minimal PDF file structure
+    const dummyPdfContent = `%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 50 >>\nstream\nBT\n/F1 12 Tf\n70 700 Td\n(TrustAssure Dummy Seeded Document) Tj\nET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f\n0000000009 00000 n\n0000000058 00000 n\n0000000115 00000 n\n0000000222 00000 n\ntrailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n323\n%%EOF\n`;
+    fs.writeFileSync(filePath, dummyPdfContent);
+  }
+});
+
 const getFilePath = (table) => path.join(DB_DIR, `${table}.json`);
 
 const readTable = (table) => {
