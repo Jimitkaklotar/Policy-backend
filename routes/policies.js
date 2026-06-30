@@ -346,7 +346,21 @@ router.delete('/:id/documents/:docId', authMiddleware, (req, res) => {
     }
   }
 
-  res.json({ message: 'Document deleted successfully' });
+// GET /api/policies/documents/download/:docId
+router.get('/documents/download/:docId', (req, res) => {
+  const documents = readTable('documents');
+  const doc = documents.find(d => d.id === req.params.docId);
+  if (!doc) {
+    return res.status(404).json({ message: 'Document not found' });
+  }
+
+  const fullPath = path.join(__dirname, '..', doc.filePath);
+  if (!fs.existsSync(fullPath)) {
+    return res.status(404).json({ message: 'Physical file not found on server' });
+  }
+
+  // Force browser file download dialog
+  res.download(fullPath, doc.documentName + path.extname(doc.filePath));
 });
 
 module.exports = router;
