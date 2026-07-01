@@ -43,6 +43,7 @@ router.get('/summary', authMiddleware, (req, res) => {
       name: c.name,
       dob: c.dob,
       phone: c.phone,
+      email: c.email || '',
       avatar: c.avatar,
       whatsappUrl
     };
