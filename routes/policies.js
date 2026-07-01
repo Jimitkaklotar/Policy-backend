@@ -48,7 +48,17 @@ router.get('/', authMiddleware, (req, res) => {
   // Sort by created date or number
   policies.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
-  res.json(policies);
+  // Attach policy schedule document if it exists
+  const documents = readTable('documents');
+  const policiesWithDocs = policies.map(p => {
+    const scheduleDoc = documents.find(d => d.policyId === p.id && d.documentType === 'Policy Schedule');
+    return {
+      ...p,
+      scheduleDocument: scheduleDoc || null
+    };
+  });
+
+  res.json(policiesWithDocs);
 });
 
 // GET /api/policies/:id
