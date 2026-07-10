@@ -65,6 +65,7 @@ router.get('/summary', authMiddleware, (req, res) => {
     // Client details
     const client = clients.find(c => c.id === p.clientId);
     const clientPhone = client ? client.phone : '';
+    const clientEmail = client ? client.email : '';
     const cleanPhone = clientPhone.replace(/[^0-9]/g, '');
 
     // Prefilled renewal text
@@ -75,6 +76,7 @@ router.get('/summary', authMiddleware, (req, res) => {
       policyId: p.id,
       policyNumber: p.policyNumber,
       clientName: p.clientName,
+      clientEmail,
       type: p.type,
       expiryDate: p.expiryDate,
       daysLeft: diffDays,
