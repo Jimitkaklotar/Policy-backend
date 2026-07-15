@@ -6,13 +6,9 @@ const path = require('path');
 const bcrypt = require('bcryptjs');
 const { MongoClient } = require('mongodb');
 
-const DB_DIR = path.join(__dirname, 'database');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
-// Ensure database and uploads directories exist locally
-if (!fs.existsSync(DB_DIR)) {
-  fs.mkdirSync(DB_DIR, { recursive: true });
-}
+// Ensure uploads directory exists locally
 if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
