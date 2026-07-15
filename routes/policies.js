@@ -6,6 +6,7 @@ const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
+const { sendMailNotification } = require('../utils/mailer');
 
 // Multer Setup for File Uploads
 const storage = multer.diskStorage({
@@ -209,6 +210,43 @@ router.post('/', authMiddleware, upload.single('file'), async (req, res) => {
       await db.collection('activities').deleteMany({ id: { $in: toDeleteIds } });
     }
 
+    // Send email notification to client and author
+    const mailContent = `
+      <p>Dear jimt & Client,</p>
+      <p>A new insurance policy has been issued successfully on the TrustAssure Broker CRM.</p>
+      <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; width: 120px; border-bottom: 1px solid #f1f5f9;">Policy Number:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newPolicy.policyNumber}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Client Name:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newPolicy.clientName}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Insurance Type:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newPolicy.type}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Premium Amount:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">₹${newPolicy.premiumAmount.toLocaleString()}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Sum Assured:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">₹${newPolicy.sumAssured.toLocaleString()}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Expiry Date:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newPolicy.expiryDate}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Status:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9; color: #10B981; font-weight: 500;">${newPolicy.status}</td>
+        </tr>
+      </table>
+    `;
+    sendMailNotification(client.email, `Policy Issued: ${newPolicy.policyNumber}`, 'Insurance Policy Issued Confirmation', mailContent);
+
     res.status(201).json(newPolicy);
   } catch (error) {
     res.status(500).json({ message: 'Error issuing policy', error: error.message });
@@ -254,6 +292,38 @@ router.put('/:id', authMiddleware, async (req, res) => {
       type: 'info'
     };
     await db.collection('activities').insertOne(activity);
+
+    // Send email notification to client and author
+    const client = await db.collection('clients').findOne({ id: updatedPolicy.clientId });
+    if (client) {
+      const mailContent = `
+        <p>Dear jimt & Client,</p>
+        <p>Your TrustAssure insurance policy details have been updated successfully.</p>
+        <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+          <tr>
+            <td style="padding: 8px 0; font-weight: bold; width: 120px; border-bottom: 1px solid #f1f5f9;">Policy Number:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${updatedPolicy.policyNumber}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Insurance Type:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${updatedPolicy.type}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Premium Amount:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">₹${updatedPolicy.premiumAmount.toLocaleString()}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Expiry Date:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${updatedPolicy.expiryDate}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Status:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${updatedPolicy.status}</td>
+          </tr>
+        </table>
+      `;
+      sendMailNotification(client.email, `Policy Updated: ${updatedPolicy.policyNumber}`, 'Insurance Policy Details Updated', mailContent);
+    }
 
     delete updatedPolicy._id;
     res.json(updatedPolicy);
@@ -358,6 +428,30 @@ router.post('/:id/documents/upload', authMiddleware, upload.single('file'), asyn
     const hasPAN = docsForPolicy.some(d => d.documentType.toLowerCase() === 'pan');
     if (hasAadhaar && hasPAN && !policy.kycVerified) {
       await db.collection('policies').updateOne({ id: policy.id }, { $set: { kycVerified: true } });
+    }
+
+    // Send email notification to client and author
+    const client = await db.collection('clients').findOne({ id: policy.clientId });
+    if (client) {
+      const mailContent = `
+        <p>Dear jimt & Client,</p>
+        <p>A new document has been uploaded to the document vault for policy <strong>${policy.policyNumber}</strong>.</p>
+        <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+          <tr>
+            <td style="padding: 8px 0; font-weight: bold; width: 120px; border-bottom: 1px solid #f1f5f9;">Document Name:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newDoc.documentName}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Document Type:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newDoc.documentType}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">File Size:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newDoc.fileSize}</td>
+          </tr>
+        </table>
+      `;
+      sendMailNotification(client.email, `Document Uploaded: ${newDoc.documentName}`, 'Document Upload Notification', mailContent);
     }
 
     res.status(201).json(newDoc);

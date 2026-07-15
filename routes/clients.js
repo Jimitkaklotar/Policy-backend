@@ -6,6 +6,7 @@ const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const { getDb } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
+const { sendMailNotification } = require('../utils/mailer');
 
 // Multer Storage Configuration
 const storage = multer.diskStorage({
@@ -179,6 +180,35 @@ router.post('/', authMiddleware, upload.fields([{ name: 'aadhaar', maxCount: 1 }
       await db.collection('activities').deleteMany({ id: { $in: toDeleteIds } });
     }
 
+    // Send email notification to client and author
+    const mailContent = `
+      <p>Dear jimt & Client,</p>
+      <p>A new client profile has been registered successfully on the TrustAssure Broker CRM.</p>
+      <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; width: 120px; border-bottom: 1px solid #f1f5f9;">Client ID:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newClient.id}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Full Name:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newClient.name}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Email ID:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newClient.email}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Mobile No:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newClient.phone || 'N/A'}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Date of Birth:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newClient.dob || 'N/A'}</td>
+        </tr>
+      </table>
+    `;
+    sendMailNotification(newClient.email, `Client Registered: ${newClient.name}`, 'Client Registration Complete', mailContent);
+
     res.status(201).json(newClient);
   } catch (error) {
     res.status(500).json({ message: 'Error creating client', error: error.message });
@@ -290,6 +320,35 @@ router.put('/:id', authMiddleware, upload.fields([{ name: 'aadhaar', maxCount: 1
       type: 'info'
     };
     await db.collection('activities').insertOne(activity);
+
+    // Send email notification to client and author
+    const mailContent = `
+      <p>Dear jimt & Client,</p>
+      <p>The client profile details have been updated successfully on the TrustAssure Broker CRM.</p>
+      <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; width: 120px; border-bottom: 1px solid #f1f5f9;">Client ID:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${updatedClient.id}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Full Name:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${updatedClient.name}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Email ID:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${updatedClient.email}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Mobile No:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${updatedClient.phone || 'N/A'}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Status:</td>
+          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${updatedClient.status}</td>
+        </tr>
+      </table>
+    `;
+    sendMailNotification(updatedClient.email, `Client Updated: ${updatedClient.name}`, 'Client Profile Updated', mailContent);
 
     delete updatedClient._id;
     res.json(updatedClient);
