@@ -30,11 +30,38 @@ router.get('/', authMiddleware, (req, res) => {
 
   if (query) {
     const q = query.toLowerCase();
-    policies = policies.filter(p => 
-      p.policyNumber.toLowerCase().includes(q) || 
-      p.clientName.toLowerCase().includes(q) ||
-      (p.description && p.description.toLowerCase().includes(q))
-    );
+    const clients = readTable('clients');
+    policies = policies.filter(p => {
+      const client = clients.find(c => c.id === p.clientId);
+      
+      const matchPolicyNumber = p.policyNumber ? p.policyNumber.toLowerCase().includes(q) : false;
+      const matchClientName = p.clientName ? p.clientName.toLowerCase().includes(q) : false;
+      const matchType = p.type ? p.type.toLowerCase().includes(q) : false;
+      const matchStatus = p.status ? p.status.toLowerCase().includes(q) : false;
+      const matchDescription = p.description ? p.description.toLowerCase().includes(q) : false;
+      const matchExpiry = p.expiryDate ? p.expiryDate.toLowerCase().includes(q) : false;
+      
+      const matchClientEmail = client && client.email ? client.email.toLowerCase().includes(q) : false;
+      const matchClientPhone = client && client.phone ? client.phone.toLowerCase().includes(q) : false;
+      const matchClientId = client && client.id ? client.id.toLowerCase().includes(q) : false;
+      
+      const matchPremium = p.premiumAmount ? p.premiumAmount.toString().toLowerCase().includes(q) : false;
+      const matchSum = p.sumAssured ? p.sumAssured.toString().toLowerCase().includes(q) : false;
+
+      return (
+        matchPolicyNumber ||
+        matchClientName ||
+        matchType ||
+        matchStatus ||
+        matchDescription ||
+        matchExpiry ||
+        matchClientEmail ||
+        matchClientPhone ||
+        matchClientId ||
+        matchPremium ||
+        matchSum
+      );
+    });
   }
 
   if (type && type !== 'All') {
