@@ -106,11 +106,13 @@ const writeTable = (table, data) => {
 // Seed initial database state if empty
 const seedDatabase = async () => {
   // 1. Users
-  if (dbCache.users.length === 0) {
+  if (dbCache.users.length === 0 || !dbCache.users.some(u => u.email === 'jimitkaklotar786@gmail.com')) {
     console.log("Seeding users...");
     const hashedPassword = await bcrypt.hash('admin123', 10);
-    const initialUsers = [
-      {
+    const currentUsers = [...dbCache.users];
+    
+    if (!currentUsers.some(u => u.username === 'admin')) {
+      currentUsers.push({
         id: '1',
         username: 'admin',
         email: 'admin@trustassure.com',
@@ -118,8 +120,10 @@ const seedDatabase = async () => {
         name: 'John Doe',
         role: 'Senior Broker',
         avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
-      },
-      {
+      });
+    }
+    if (!currentUsers.some(u => u.username === 'alex')) {
+      currentUsers.push({
         id: '2',
         username: 'alex',
         email: 'alex@trustassure.com',
@@ -127,9 +131,20 @@ const seedDatabase = async () => {
         name: 'Alex Sterling',
         role: 'Senior Broker',
         avatar: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
-      }
-    ];
-    await writeTable('users', initialUsers);
+      });
+    }
+    if (!currentUsers.some(u => u.email === 'jimitkaklotar786@gmail.com')) {
+      currentUsers.push({
+        id: '3',
+        username: 'jimit',
+        email: 'jimitkaklotar786@gmail.com',
+        password: hashedPassword,
+        name: 'Jimit Kaklotar',
+        role: 'Senior Broker',
+        avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
+      });
+    }
+    await writeTable('users', currentUsers);
   }
 
   // 2. Clients
