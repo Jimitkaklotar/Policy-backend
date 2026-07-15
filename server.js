@@ -1,7 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const path = require('path');
-const { seedDatabase } = require('./db');
+const { connectDB } = require('./db');
 
 const authRoutes = require('./routes/auth');
 const dashboardRoutes = require('./routes/dashboard');
@@ -39,7 +39,7 @@ app.use((err, req, res, next) => {
 // Run server
 const startServer = async () => {
   try {
-    await seedDatabase();
+    await connectDB();
     app.listen(PORT, () => {
       console.log(`Backend server is running on http://localhost:${PORT}`);
     });

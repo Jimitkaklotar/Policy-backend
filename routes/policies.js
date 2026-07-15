@@ -75,12 +75,16 @@ router.get('/', authMiddleware, (req, res) => {
   // Sort by created date or number
   policies.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
-  // Attach policy schedule document if it exists
+  // Attach client details and policy schedule document if it exists
   const documents = readTable('documents');
+  const clients = readTable('clients');
   const policiesWithDocs = policies.map(p => {
     const scheduleDoc = documents.find(d => d.policyId === p.id && d.documentType === 'Policy Schedule');
+    const client = clients.find(c => c.id === p.clientId);
     return {
       ...p,
+      clientEmail: client ? client.email : '',
+      clientPhone: client ? client.phone : '',
       scheduleDocument: scheduleDoc || null
     };
   });

@@ -1,11 +1,15 @@
+const dns = require('dns');
+dns.setServers(['8.8.8.8', '1.1.1.1']);
+
 const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcryptjs');
+const { MongoClient } = require('mongodb');
 
 const DB_DIR = path.join(__dirname, 'database');
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
-// Ensure database and uploads directories exist
+// Ensure database and uploads directories exist locally
 if (!fs.existsSync(DB_DIR)) {
   fs.mkdirSync(DB_DIR, { recursive: true });
 }
@@ -13,51 +17,103 @@ if (!fs.existsSync(UPLOADS_DIR)) {
   fs.mkdirSync(UPLOADS_DIR, { recursive: true });
 }
 
-// Seed dummy PDF documents for testing
+// Seed dummy PDF documents locally for testing
 const dummyFiles = ['policy_schedule_p1.pdf', 'aadhaar_c1.pdf', 'pan_c1.pdf'];
 dummyFiles.forEach(fileName => {
   const filePath = path.join(UPLOADS_DIR, fileName);
   if (!fs.existsSync(filePath)) {
-    // Write a valid minimal PDF file structure
     const dummyPdfContent = `%PDF-1.4\n1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n2 0 obj\n<< /Type /Pages /Kids [3 0 R] /Count 1 >>\nendobj\n3 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R >>\nendobj\n4 0 obj\n<< /Length 50 >>\nstream\nBT\n/F1 12 Tf\n70 700 Td\n(TrustAssure Dummy Seeded Document) Tj\nET\nendstream\nendobj\nxref\n0 5\n0000000000 65535 f\n0000000009 00000 n\n0000000058 00000 n\n0000000115 00000 n\n0000000222 00000 n\ntrailer\n<< /Size 5 /Root 1 0 R >>\nstartxref\n323\n%%EOF\n`;
     fs.writeFileSync(filePath, dummyPdfContent);
   }
 });
 
-const getFilePath = (table) => path.join(DB_DIR, `${table}.json`);
+// MongoDB Atlas Configuration
+const uri = "mongodb+srv://jimitkaklotar786_db_user:n89oW7QRHwWEDcPx@cluster0.o5uo0nt.mongodb.net/?retryWrites=true&w=majority";
+const mongoClient = new MongoClient(uri);
+const DB_NAME = "trustassure";
 
-const readTable = (table) => {
-  const filePath = getFilePath(table);
-  if (!fs.existsSync(filePath)) {
-    return [];
-  }
+// In-Memory cache of tables
+const dbCache = {
+  users: [],
+  clients: [],
+  policies: [],
+  documents: [],
+  tasks: [],
+  activities: []
+};
+
+let dbConnection = null;
+let isConnected = false;
+
+// Async function to connect to MongoDB Atlas and preload all tables
+const connectDB = async () => {
   try {
-    const data = fs.readFileSync(filePath, 'utf8');
-    return JSON.parse(data || '[]');
+    console.log("Connecting to MongoDB Atlas...");
+    await mongoClient.connect();
+    dbConnection = mongoClient.db(DB_NAME);
+    isConnected = true;
+    console.log("Successfully connected to MongoDB Atlas!");
+
+    // Preload all tables from cloud database
+    const tables = Object.keys(dbCache);
+    for (const table of tables) {
+      const collection = dbConnection.collection(table);
+      const data = await collection.find({}).toArray();
+      dbCache[table] = data;
+      console.log(`Preloaded table '${table}': ${data.length} records`);
+    }
+
+    // Seed default records if collections are empty
+    await seedDatabase();
   } catch (error) {
-    console.error(`Error reading table ${table}:`, error);
-    return [];
+    console.error("Failed to connect to MongoDB Atlas:", error);
+    throw error;
   }
 };
 
+const readTable = (table) => {
+  return dbCache[table] || [];
+};
+
 const writeTable = (table, data) => {
-  const filePath = getFilePath(table);
-  try {
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf8');
-    return true;
-  } catch (error) {
-    console.error(`Error writing table ${table}:`, error);
-    return false;
+  // Update memory cache synchronously
+  dbCache[table] = data;
+
+  // Asynchronously update MongoDB in background
+  if (isConnected && dbConnection) {
+    const collection = dbConnection.collection(table);
+    // Replace all documents in collection with the new data array
+    collection.deleteMany({})
+      .then(() => {
+        if (data.length > 0) {
+          // Remove _id from objects to prevent insertion/duplicate-key conflicts
+          const cleanData = data.map(item => {
+            const copy = { ...item };
+            delete copy._id;
+            return copy;
+          });
+          return collection.insertMany(cleanData);
+        }
+      })
+      .then(() => {
+        console.log(`Successfully synced table '${table}' to MongoDB`);
+      })
+      .catch(error => {
+        console.error(`Error syncing table '${table}' to MongoDB:`, error);
+      });
+  } else {
+    console.warn(`MongoDB not connected. Changes to '${table}' are kept in memory only.`);
   }
+  return true;
 };
 
 // Seed initial database state if empty
 const seedDatabase = async () => {
   // 1. Users
-  const usersFile = getFilePath('users');
-  if (!fs.existsSync(usersFile) || readTable('users').length === 0) {
+  if (dbCache.users.length === 0) {
+    console.log("Seeding users...");
     const hashedPassword = await bcrypt.hash('admin123', 10);
-    writeTable('users', [
+    const initialUsers = [
       {
         id: '1',
         username: 'admin',
@@ -76,18 +132,17 @@ const seedDatabase = async () => {
         role: 'Senior Broker',
         avatar: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
       }
-    ]);
+    ];
+    await writeTable('users', initialUsers);
   }
 
   // 2. Clients
-  const clientsFile = getFilePath('clients');
-  if (!fs.existsSync(clientsFile) || readTable('clients').length === 0) {
-    // We want some birthdays to be dynamic: today's date
+  if (dbCache.clients.length === 0) {
+    console.log("Seeding clients...");
     const today = new Date();
     const formattedTodayDob = `${today.getFullYear() - 40}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
     
-    // Rahul Sharma birthday today
-    writeTable('clients', [
+    const initialClients = [
       {
         id: 'c1',
         name: 'Rahul Sharma',
@@ -143,12 +198,13 @@ const seedDatabase = async () => {
         avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
         createdAt: new Date().toISOString()
       }
-    ]);
+    ];
+    await writeTable('clients', initialClients);
   }
 
   // 3. Policies
-  const policiesFile = getFilePath('policies');
-  if (!fs.existsSync(policiesFile) || readTable('policies').length === 0) {
+  if (dbCache.policies.length === 0) {
+    console.log("Seeding policies...");
     const today = new Date();
     
     // Helper to add days
@@ -158,7 +214,7 @@ const seedDatabase = async () => {
       return result.toISOString().split('T')[0];
     };
 
-    writeTable('policies', [
+    const initialPolicies = [
       {
         id: 'p1',
         policyNumber: 'POL-987654321',
@@ -215,13 +271,14 @@ const seedDatabase = async () => {
         kycVerified: false,
         createdAt: new Date().toISOString()
       }
-    ]);
+    ];
+    await writeTable('policies', initialPolicies);
   }
 
   // 4. Documents Vault
-  const documentsFile = getFilePath('documents');
-  if (!fs.existsSync(documentsFile) || readTable('documents').length === 0) {
-    writeTable('documents', [
+  if (dbCache.documents.length === 0) {
+    console.log("Seeding documents...");
+    const initialDocuments = [
       {
         id: 'd1',
         policyId: 'p1',
@@ -252,13 +309,14 @@ const seedDatabase = async () => {
         fileSize: '1.1 MB',
         uploadedAt: new Date(Date.now() - 30 * 24 * 3600 * 1000).toISOString()
       }
-    ]);
+    ];
+    await writeTable('documents', initialDocuments);
   }
 
   // 5. Tasks
-  const tasksFile = getFilePath('tasks');
-  if (!fs.existsSync(tasksFile) || readTable('tasks').length === 0) {
-    writeTable('tasks', [
+  if (dbCache.tasks.length === 0) {
+    console.log("Seeding tasks...");
+    const initialTasks = [
       {
         id: 't1',
         title: 'Call Sarah Jenkins regarding claim #9921',
@@ -291,13 +349,14 @@ const seedDatabase = async () => {
         priority: 'Low',
         createdAt: new Date().toISOString()
       }
-    ]);
+    ];
+    await writeTable('tasks', initialTasks);
   }
 
   // 6. Activities
-  const activitiesFile = getFilePath('activities');
-  if (!fs.existsSync(activitiesFile) || readTable('activities').length === 0) {
-    writeTable('activities', [
+  if (dbCache.activities.length === 0) {
+    console.log("Seeding activities...");
+    const initialActivities = [
       {
         id: 'a1',
         logText: 'Call logged with Sarah Jenkins regarding claim #9921',
@@ -328,14 +387,13 @@ const seedDatabase = async () => {
         timestamp: new Date(Date.now() - 25 * 3600 * 1000).toISOString(),
         type: 'danger'
       }
-    ]);
+    ];
+    await writeTable('activities', initialActivities);
   }
 };
 
-// Seed on startup
-seedDatabase().catch(console.error);
-
 module.exports = {
+  connectDB,
   readTable,
   writeTable,
   seedDatabase
