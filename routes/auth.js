@@ -3,7 +3,7 @@ const router = express.Router();
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
-const { readTable, writeTable } = require('../db');
+const { getDb } = require('../db');
 const { JWT_SECRET, authMiddleware } = require('../middleware/auth');
 
 // POST /api/auth/login
@@ -13,50 +13,59 @@ router.post('/login', async (req, res) => {
     return res.status(400).json({ message: 'Email and password are required' });
   }
 
-  const users = readTable('users');
-  const user = users.find(u => u.email && u.email.toLowerCase() === email.toLowerCase());
-  if (!user) {
-    return res.status(401).json({ message: 'Invalid email or password' });
-  }
-
-  const isMatch = await bcrypt.compare(password, user.password);
-  if (!isMatch) {
-    return res.status(401).json({ message: 'Invalid email or password' });
-  }
-
-  const token = jwt.sign(
-    { id: user.id, username: user.username, name: user.name, role: user.role },
-    JWT_SECRET,
-    { expiresIn: '24h' }
-  );
-
-  return res.json({
-    token,
-    user: {
-      id: user.id,
-      username: user.username,
-      email: user.email,
-      name: user.name,
-      role: user.role,
-      avatar: user.avatar
+  try {
+    const db = getDb();
+    const user = await db.collection('users').findOne({ email: { $regex: new RegExp(`^${email}$`, 'i') } });
+    
+    if (!user) {
+      return res.status(401).json({ message: 'Invalid email or password' });
     }
-  });
+
+    const isMatch = await bcrypt.compare(password, user.password);
+    if (!isMatch) {
+      return res.status(401).json({ message: 'Invalid email or password' });
+    }
+
+    const token = jwt.sign(
+      { id: user.id, username: user.username, name: user.name, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+
+    return res.json({
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        name: user.name,
+        role: user.role,
+        avatar: user.avatar
+      }
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Login failed', error: error.message });
+  }
 });
 
 // GET /api/auth/me
-router.get('/me', authMiddleware, (req, res) => {
-  const users = readTable('users');
-  const user = users.find(u => u.id === req.user.id);
-  if (!user) {
-    return res.status(404).json({ message: 'User not found' });
+router.get('/me', authMiddleware, async (req, res) => {
+  try {
+    const db = getDb();
+    const user = await db.collection('users').findOne({ id: req.user.id });
+    if (!user) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    return res.json({
+      id: user.id,
+      username: user.username,
+      name: user.name,
+      role: user.role,
+      avatar: user.avatar
+    });
+  } catch (error) {
+    return res.status(500).json({ message: 'Profile fetch failed', error: error.message });
   }
-  return res.json({
-    id: user.id,
-    username: user.username,
-    name: user.name,
-    role: user.role,
-    avatar: user.avatar
-  });
 });
 
 // POST /api/auth/reset-password
@@ -66,8 +75,7 @@ router.post('/reset-password', (req, res) => {
     return res.status(400).json({ message: 'Email address is required' });
   }
 
-  // Find if user/broker exists with this email or just mock success
-  // For the TrustAssure broker portal, we return a successful response with a link mockup
+  // Returns successful link mock response
   return res.json({
     message: 'Password reset link sent to your registered email.',
     link: `http://localhost:5173/reset-password?token=mocked-token-for-${encodeURIComponent(email)}`
@@ -81,18 +89,18 @@ router.post('/signup', async (req, res) => {
     return res.status(400).json({ message: 'Username, email and password are required' });
   }
 
-  const users = readTable('users');
-  const emailExists = users.some(u => u.email && u.email.toLowerCase() === email.toLowerCase());
-  if (emailExists) {
-    return res.status(400).json({ message: 'Email address is already registered' });
-  }
-
-  const usernameExists = users.some(u => u.username && u.username.toLowerCase() === username.toLowerCase());
-  if (usernameExists) {
-    return res.status(400).json({ message: 'Username is already taken' });
-  }
-
   try {
+    const db = getDb();
+    const emailExists = await db.collection('users').findOne({ email: { $regex: new RegExp(`^${email}$`, 'i') } });
+    if (emailExists) {
+      return res.status(400).json({ message: 'Email address is already registered' });
+    }
+
+    const usernameExists = await db.collection('users').findOne({ username: { $regex: new RegExp(`^${username}$`, 'i') } });
+    if (usernameExists) {
+      return res.status(400).json({ message: 'Username is already taken' });
+    }
+
     const hashedPassword = await bcrypt.hash(password, 10);
     const newUser = {
       id: uuidv4(),
@@ -104,10 +112,8 @@ router.post('/signup', async (req, res) => {
       avatar: avatar || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
     };
 
-    users.push(newUser);
-    writeTable('users', users);
+    await db.collection('users').insertOne(newUser);
 
-    // Generate JWT token
     const token = jwt.sign(
       { id: newUser.id, username: newUser.username, name: newUser.name, role: newUser.role },
       JWT_SECRET,

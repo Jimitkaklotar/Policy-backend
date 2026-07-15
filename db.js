@@ -403,8 +403,16 @@ const seedDatabase = async () => {
   }
 };
 
+const getDb = () => {
+  if (!dbConnection) {
+    throw new Error("Database not connected yet");
+  }
+  return dbConnection;
+};
+
 module.exports = {
   connectDB,
+  getDb,
   readTable,
   writeTable,
   seedDatabase

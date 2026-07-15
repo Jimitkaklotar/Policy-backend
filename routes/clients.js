@@ -4,7 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
-const { readTable, writeTable } = require('../db');
+const { getDb } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 
 // Multer Storage Configuration
@@ -24,52 +24,61 @@ const upload = multer({
 });
 
 // GET /api/clients
-router.get('/', authMiddleware, (req, res) => {
-  let clients = readTable('clients');
-  const { query, status } = req.query;
+router.get('/', authMiddleware, async (req, res) => {
+  try {
+    const db = getDb();
+    const { query, status } = req.query;
 
-  if (query) {
-    const q = query.toLowerCase();
-    clients = clients.filter(c => 
-      c.name.toLowerCase().includes(q) || 
-      c.phone.toLowerCase().includes(q) || 
-      c.email.toLowerCase().includes(q) ||
-      c.id.toLowerCase().includes(q)
-    );
+    const filter = {};
+    if (status && status !== 'All') {
+      filter.status = { $regex: new RegExp(`^${status}$`, 'i') };
+    }
+
+    if (query) {
+      const q = query.toLowerCase();
+      filter.$or = [
+        { name: { $regex: q, $options: 'i' } },
+        { phone: { $regex: q, $options: 'i' } },
+        { email: { $regex: q, $options: 'i' } },
+        { id: { $regex: q, $options: 'i' } }
+      ];
+    }
+
+    const clients = await db.collection('clients').find(filter).toArray();
+    clients.sort((a, b) => a.name.localeCompare(b.name));
+
+    // Fetch documents and attach
+    const documents = await db.collection('documents').find({}).toArray();
+    const clientsWithDocs = clients.map(c => {
+      const clientDocs = documents.filter(d => d.clientId === c.id);
+      return {
+        ...c,
+        documents: clientDocs
+      };
+    });
+
+    res.json(clientsWithDocs);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching clients', error: error.message });
   }
-
-  if (status && status !== 'All') {
-    clients = clients.filter(c => c.status.toLowerCase() === status.toLowerCase());
-  }
-
-  // Sort by name
-  clients.sort((a, b) => a.name.localeCompare(b.name));
-
-  // Attach documents to each client
-  const documents = readTable('documents');
-  const clientsWithDocs = clients.map(c => {
-    const clientDocs = documents.filter(d => d.clientId === c.id);
-    return {
-      ...c,
-      documents: clientDocs
-    };
-  });
-
-  res.json(clientsWithDocs);
 });
 
 // GET /api/clients/:id
-router.get('/:id', authMiddleware, (req, res) => {
-  const clients = readTable('clients');
-  const client = clients.find(c => c.id === req.params.id);
-  if (!client) {
-    return res.status(404).json({ message: 'Client not found' });
+router.get('/:id', authMiddleware, async (req, res) => {
+  try {
+    const db = getDb();
+    const client = await db.collection('clients').findOne({ id: req.params.id });
+    if (!client) {
+      return res.status(404).json({ message: 'Client not found' });
+    }
+    res.json(client);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching client details', error: error.message });
   }
-  res.json(client);
 });
 
 // POST /api/clients
-router.post('/', authMiddleware, upload.fields([{ name: 'aadhaar', maxCount: 1 }, { name: 'pan', maxCount: 1 }]), (req, res) => {
+router.post('/', authMiddleware, upload.fields([{ name: 'aadhaar', maxCount: 1 }, { name: 'pan', maxCount: 1 }]), async (req, res) => {
   const { name, email, phone, dob, status } = req.body;
   if (!name || !email) {
     if (req.files) {
@@ -83,149 +92,42 @@ router.post('/', authMiddleware, upload.fields([{ name: 'aadhaar', maxCount: 1 }
     return res.status(400).json({ message: 'Name and Email are required' });
   }
 
-  const clients = readTable('clients');
-  const avatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=004DC0&color=fff`;
+  try {
+    const db = getDb();
+    const avatar = `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=004DC0&color=fff`;
 
-  const newClient = {
-    id: 'cli-' + Math.floor(10000 + Math.random() * 90000), // e.g. CLI-29402 style
-    name,
-    email,
-    phone: phone || '',
-    dob: dob || '',
-    activePoliciesCount: 0,
-    status: status || 'Active',
-    avatar,
-    createdAt: new Date().toISOString()
-  };
+    const newClient = {
+      id: 'cli-' + Math.floor(10000 + Math.random() * 90000),
+      name,
+      email,
+      phone: phone || '',
+      dob: dob || '',
+      activePoliciesCount: 0,
+      status: status || 'Active',
+      avatar,
+      createdAt: new Date().toISOString()
+    };
 
-  clients.push(newClient);
-  writeTable('clients', clients);
+    await db.collection('clients').insertOne(newClient);
 
-  // Handle uploaded files (Aadhaar & PAN)
-  if (req.files) {
-    const documents = readTable('documents');
-
-    if (req.files.aadhaar) {
-      const file = req.files.aadhaar[0];
-      const bytes = file.size;
-      let formattedSize = '0 Bytes';
-      if (bytes > 0) {
-        const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        formattedSize = parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-      }
-      documents.push({
-        id: 'doc-' + uuidv4(),
-        policyId: '', // client level
-        clientId: newClient.id,
-        documentName: 'Aadhaar Card',
-        documentType: 'Aadhaar',
-        filePath: `uploads/${file.filename}`,
-        fileSize: formattedSize,
-        uploadedAt: new Date().toISOString()
-      });
-    }
-
-    if (req.files.pan) {
-      const file = req.files.pan[0];
-      const bytes = file.size;
-      let formattedSize = '0 Bytes';
-      if (bytes > 0) {
-        const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        formattedSize = parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-      }
-      documents.push({
-        id: 'doc-' + uuidv4(),
-        policyId: '', // client level
-        clientId: newClient.id,
-        documentName: 'PAN Card Copy',
-        documentType: 'PAN',
-        filePath: `uploads/${file.filename}`,
-        fileSize: formattedSize,
-        uploadedAt: new Date().toISOString()
-      });
-    }
-
-    writeTable('documents', documents);
-  }
-
-  // Log activity
-  const activities = readTable('activities');
-  activities.unshift({
-    id: 'act-' + uuidv4(),
-    logText: `New Client added: ${name}`,
-    timestamp: new Date().toISOString(),
-    type: 'info'
-  });
-  writeTable('activities', activities.slice(0, 50)); // Keep last 50 activities
-
-  res.status(201).json(newClient);
-});
-
-// PUT /api/clients/:id
-router.put('/:id', authMiddleware, upload.fields([{ name: 'aadhaar', maxCount: 1 }, { name: 'pan', maxCount: 1 }]), (req, res) => {
-  const clients = readTable('clients');
-  const idx = clients.findIndex(c => c.id === req.params.id);
-  if (idx === -1) {
+    // Handle uploaded files (Aadhaar & PAN)
     if (req.files) {
-      if (req.files.aadhaar) { try { fs.unlinkSync(req.files.aadhaar[0].path); } catch (e) {} }
-      if (req.files.pan) { try { fs.unlinkSync(req.files.pan[0].path); } catch (e) {} }
-    }
-    return res.status(404).json({ message: 'Client not found' });
-  }
+      const clientDocs = [];
 
-  const { name, email, phone, dob, status } = req.body;
-  const updatedClient = {
-    ...clients[idx],
-    name: name || clients[idx].name,
-    email: email || clients[idx].email,
-    phone: phone !== undefined ? phone : clients[idx].phone,
-    dob: dob !== undefined ? dob : clients[idx].dob,
-    status: status || clients[idx].status
-  };
-
-  clients[idx] = updatedClient;
-  writeTable('clients', clients);
-
-  // Handle uploaded files (Aadhaar & PAN update)
-  if (req.files) {
-    const documents = readTable('documents');
-
-    if (req.files.aadhaar) {
-      const file = req.files.aadhaar[0];
-      const bytes = file.size;
-      let formattedSize = '0 Bytes';
-      if (bytes > 0) {
-        const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        formattedSize = parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-      }
-
-      // Check if Aadhaar already exists
-      const existingDocIdx = documents.findIndex(d => d.clientId === req.params.id && d.documentType === 'Aadhaar');
-      if (existingDocIdx !== -1) {
-        // Delete old file
-        const oldPath = path.join(__dirname, '..', documents[existingDocIdx].filePath);
-        if (fs.existsSync(oldPath)) {
-          try { fs.unlinkSync(oldPath); } catch (e) {}
+      if (req.files.aadhaar) {
+        const file = req.files.aadhaar[0];
+        const bytes = file.size;
+        let formattedSize = '0 Bytes';
+        if (bytes > 0) {
+          const k = 1024;
+          const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+          const i = Math.floor(Math.log(bytes) / Math.log(k));
+          formattedSize = parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
         }
-        // Update record
-        documents[existingDocIdx] = {
-          ...documents[existingDocIdx],
-          filePath: `uploads/${file.filename}`,
-          fileSize: formattedSize,
-          uploadedAt: new Date().toISOString()
-        };
-      } else {
-        // Add new record
-        documents.push({
+        clientDocs.push({
           id: 'doc-' + uuidv4(),
           policyId: '',
-          clientId: req.params.id,
+          clientId: newClient.id,
           documentName: 'Aadhaar Card',
           documentType: 'Aadhaar',
           filePath: `uploads/${file.filename}`,
@@ -233,40 +135,21 @@ router.put('/:id', authMiddleware, upload.fields([{ name: 'aadhaar', maxCount: 1
           uploadedAt: new Date().toISOString()
         });
       }
-    }
 
-    if (req.files.pan) {
-      const file = req.files.pan[0];
-      const bytes = file.size;
-      let formattedSize = '0 Bytes';
-      if (bytes > 0) {
-        const k = 1024;
-        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-        const i = Math.floor(Math.log(bytes) / Math.log(k));
-        formattedSize = parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-      }
-
-      // Check if PAN already exists
-      const existingDocIdx = documents.findIndex(d => d.clientId === req.params.id && d.documentType === 'PAN');
-      if (existingDocIdx !== -1) {
-        // Delete old file
-        const oldPath = path.join(__dirname, '..', documents[existingDocIdx].filePath);
-        if (fs.existsSync(oldPath)) {
-          try { fs.unlinkSync(oldPath); } catch (e) {}
+      if (req.files.pan) {
+        const file = req.files.pan[0];
+        const bytes = file.size;
+        let formattedSize = '0 Bytes';
+        if (bytes > 0) {
+          const k = 1024;
+          const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+          const i = Math.floor(Math.log(bytes) / Math.log(k));
+          formattedSize = parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
         }
-        // Update record
-        documents[existingDocIdx] = {
-          ...documents[existingDocIdx],
-          filePath: `uploads/${file.filename}`,
-          fileSize: formattedSize,
-          uploadedAt: new Date().toISOString()
-        };
-      } else {
-        // Add new record
-        documents.push({
+        clientDocs.push({
           id: 'doc-' + uuidv4(),
           policyId: '',
-          clientId: req.params.id,
+          clientId: newClient.id,
           documentName: 'PAN Card Copy',
           documentType: 'PAN',
           filePath: `uploads/${file.filename}`,
@@ -274,50 +157,173 @@ router.put('/:id', authMiddleware, upload.fields([{ name: 'aadhaar', maxCount: 1
           uploadedAt: new Date().toISOString()
         });
       }
+
+      if (clientDocs.length > 0) {
+        await db.collection('documents').insertMany(clientDocs);
+      }
     }
 
-    writeTable('documents', documents);
+    // Log activity
+    const activity = {
+      id: 'act-' + uuidv4(),
+      logText: `New Client added: ${name}`,
+      timestamp: new Date().toISOString(),
+      type: 'info'
+    };
+    await db.collection('activities').insertOne(activity);
+
+    // Keep last 50 activities
+    const acts = await db.collection('activities').find({}).sort({ timestamp: -1 }).toArray();
+    if (acts.length > 50) {
+      const toDeleteIds = acts.slice(50).map(a => a.id);
+      await db.collection('activities').deleteMany({ id: { $in: toDeleteIds } });
+    }
+
+    res.status(201).json(newClient);
+  } catch (error) {
+    res.status(500).json({ message: 'Error creating client', error: error.message });
   }
+});
 
-  // Log activity
-  const activities = readTable('activities');
-  activities.unshift({
-    id: 'act-' + uuidv4(),
-    logText: `Client details updated: ${updatedClient.name}`,
-    timestamp: new Date().toISOString(),
-    type: 'info'
-  });
-  writeTable('activities', activities.slice(0, 50));
+// PUT /api/clients/:id
+router.put('/:id', authMiddleware, upload.fields([{ name: 'aadhaar', maxCount: 1 }, { name: 'pan', maxCount: 1 }]), async (req, res) => {
+  try {
+    const db = getDb();
+    const client = await db.collection('clients').findOne({ id: req.params.id });
+    if (!client) {
+      if (req.files) {
+        if (req.files.aadhaar) { try { fs.unlinkSync(req.files.aadhaar[0].path); } catch (e) {} }
+        if (req.files.pan) { try { fs.unlinkSync(req.files.pan[0].path); } catch (e) {} }
+      }
+      return res.status(404).json({ message: 'Client not found' });
+    }
 
-  res.json(updatedClient);
+    const { name, email, phone, dob, status } = req.body;
+    const updatedFields = {};
+    if (name !== undefined) updatedFields.name = name;
+    if (email !== undefined) updatedFields.email = email;
+    if (phone !== undefined) updatedFields.phone = phone;
+    if (dob !== undefined) updatedFields.dob = dob;
+    if (status !== undefined) updatedFields.status = status;
+
+    await db.collection('clients').updateOne({ id: req.params.id }, { $set: updatedFields });
+    const updatedClient = { ...client, ...updatedFields };
+
+    // Handle uploaded files (Aadhaar & PAN update)
+    if (req.files) {
+      if (req.files.aadhaar) {
+        const file = req.files.aadhaar[0];
+        const bytes = file.size;
+        let formattedSize = '0 Bytes';
+        if (bytes > 0) {
+          const k = 1024;
+          const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+          const i = Math.floor(Math.log(bytes) / Math.log(k));
+          formattedSize = parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        const existingDoc = await db.collection('documents').findOne({ clientId: req.params.id, documentType: 'Aadhaar' });
+        if (existingDoc) {
+          const oldPath = path.join(__dirname, '..', existingDoc.filePath);
+          if (fs.existsSync(oldPath)) {
+            try { fs.unlinkSync(oldPath); } catch (e) {}
+          }
+          await db.collection('documents').updateOne(
+            { id: existingDoc.id },
+            { $set: { filePath: `uploads/${file.filename}`, fileSize: formattedSize, uploadedAt: new Date().toISOString() } }
+          );
+        } else {
+          await db.collection('documents').insertOne({
+            id: 'doc-' + uuidv4(),
+            policyId: '',
+            clientId: req.params.id,
+            documentName: 'Aadhaar Card',
+            documentType: 'Aadhaar',
+            filePath: `uploads/${file.filename}`,
+            fileSize: formattedSize,
+            uploadedAt: new Date().toISOString()
+          });
+        }
+      }
+
+      if (req.files.pan) {
+        const file = req.files.pan[0];
+        const bytes = file.size;
+        let formattedSize = '0 Bytes';
+        if (bytes > 0) {
+          const k = 1024;
+          const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+          const i = Math.floor(Math.log(bytes) / Math.log(k));
+          formattedSize = parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        const existingDoc = await db.collection('documents').findOne({ clientId: req.params.id, documentType: 'PAN' });
+        if (existingDoc) {
+          const oldPath = path.join(__dirname, '..', existingDoc.filePath);
+          if (fs.existsSync(oldPath)) {
+            try { fs.unlinkSync(oldPath); } catch (e) {}
+          }
+          await db.collection('documents').updateOne(
+            { id: existingDoc.id },
+            { $set: { filePath: `uploads/${file.filename}`, fileSize: formattedSize, uploadedAt: new Date().toISOString() } }
+          );
+        } else {
+          await db.collection('documents').insertOne({
+            id: 'doc-' + uuidv4(),
+            policyId: '',
+            clientId: req.params.id,
+            documentName: 'PAN Card Copy',
+            documentType: 'PAN',
+            filePath: `uploads/${file.filename}`,
+            fileSize: formattedSize,
+            uploadedAt: new Date().toISOString()
+          });
+        }
+      }
+    }
+
+    // Log activity
+    const activity = {
+      id: 'act-' + uuidv4(),
+      logText: `Client details updated: ${updatedClient.name}`,
+      timestamp: new Date().toISOString(),
+      type: 'info'
+    };
+    await db.collection('activities').insertOne(activity);
+
+    delete updatedClient._id;
+    res.json(updatedClient);
+  } catch (error) {
+    res.status(500).json({ message: 'Error updating client', error: error.message });
+  }
 });
 
 // DELETE /api/clients/:id
-router.delete('/:id', authMiddleware, (req, res) => {
-  const clients = readTable('clients');
-  const clientToDelete = clients.find(c => c.id === req.params.id);
-  if (!clientToDelete) {
-    return res.status(404).json({ message: 'Client not found' });
+router.delete('/:id', authMiddleware, async (req, res) => {
+  try {
+    const db = getDb();
+    const clientToDelete = await db.collection('clients').findOne({ id: req.params.id });
+    if (!clientToDelete) {
+      return res.status(404).json({ message: 'Client not found' });
+    }
+
+    await db.collection('clients').deleteOne({ id: req.params.id });
+    await db.collection('policies').deleteMany({ clientId: req.params.id });
+    await db.collection('documents').deleteMany({ clientId: req.params.id });
+
+    // Log activity
+    const activity = {
+      id: 'act-' + uuidv4(),
+      logText: `Client removed: ${clientToDelete.name}`,
+      timestamp: new Date().toISOString(),
+      type: 'danger'
+    };
+    await db.collection('activities').insertOne(activity);
+
+    res.json({ message: 'Client deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error deleting client', error: error.message });
   }
-
-  const filteredClients = clients.filter(c => c.id !== req.params.id);
-  writeTable('clients', filteredClients);
-
-  // Optional: cascade delete client's policies and tasks
-  const policies = readTable('policies');
-  const filteredPolicies = policies.filter(p => p.clientId !== req.params.id);
-  writeTable('policies', filteredPolicies);
-
-  const activities = readTable('activities');
-  activities.unshift({
-    id: 'act-' + uuidv4(),
-    logText: `Client removed: ${clientToDelete.name}`,
-    timestamp: new Date().toISOString(),
-    type: 'danger'
-  });
-  writeTable('activities', activities.slice(0, 50));
-
-  res.json({ message: 'Client deleted successfully' });
 });
 
 module.exports = router;

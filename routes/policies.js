@@ -4,7 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
-const { readTable, writeTable } = require('../db');
+const { getDb } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 
 // Multer Setup for File Uploads
@@ -24,140 +24,310 @@ const upload = multer({
 });
 
 // GET /api/policies
-router.get('/', authMiddleware, (req, res) => {
-  let policies = readTable('policies');
-  const { query, type, status } = req.query;
+router.get('/', authMiddleware, async (req, res) => {
+  try {
+    const db = getDb();
+    const { query, type, status } = req.query;
 
-  if (query) {
-    const q = query.toLowerCase();
-    const clients = readTable('clients');
-    policies = policies.filter(p => {
+    const filter = {};
+    if (type && type !== 'All') {
+      filter.type = { $regex: new RegExp(`^${type}$`, 'i') };
+    }
+    if (status && status !== 'All') {
+      filter.status = { $regex: new RegExp(`^${status}$`, 'i') };
+    }
+
+    let policies = await db.collection('policies').find(filter).toArray();
+
+    if (query) {
+      const q = query.toLowerCase();
+      const clients = await db.collection('clients').find({}).toArray();
+      policies = policies.filter(p => {
+        const client = clients.find(c => c.id === p.clientId);
+        
+        const matchPolicyNumber = p.policyNumber ? p.policyNumber.toLowerCase().includes(q) : false;
+        const matchClientName = p.clientName ? p.clientName.toLowerCase().includes(q) : false;
+        const matchType = p.type ? p.type.toLowerCase().includes(q) : false;
+        const matchStatus = p.status ? p.status.toLowerCase().includes(q) : false;
+        const matchDescription = p.description ? p.description.toLowerCase().includes(q) : false;
+        const matchExpiry = p.expiryDate ? p.expiryDate.toLowerCase().includes(q) : false;
+        
+        const matchClientEmail = client && client.email ? client.email.toLowerCase().includes(q) : false;
+        const matchClientPhone = client && client.phone ? client.phone.toLowerCase().includes(q) : false;
+        const matchClientId = client && client.id ? client.id.toLowerCase().includes(q) : false;
+        
+        const matchPremium = p.premiumAmount ? p.premiumAmount.toString().toLowerCase().includes(q) : false;
+        const matchSum = p.sumAssured ? p.sumAssured.toString().toLowerCase().includes(q) : false;
+
+        return (
+          matchPolicyNumber ||
+          matchClientName ||
+          matchType ||
+          matchStatus ||
+          matchDescription ||
+          matchExpiry ||
+          matchClientEmail ||
+          matchClientPhone ||
+          matchClientId ||
+          matchPremium ||
+          matchSum
+        );
+      });
+    }
+
+    // Sort by created date or number
+    policies.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+
+    // Attach client details and policy schedule document if it exists
+    const documents = await db.collection('documents').find({}).toArray();
+    const clients = await db.collection('clients').find({}).toArray();
+    const policiesWithDocs = policies.map(p => {
+      const scheduleDoc = documents.find(d => d.policyId === p.id && d.documentType === 'Policy Schedule');
       const client = clients.find(c => c.id === p.clientId);
-      
-      const matchPolicyNumber = p.policyNumber ? p.policyNumber.toLowerCase().includes(q) : false;
-      const matchClientName = p.clientName ? p.clientName.toLowerCase().includes(q) : false;
-      const matchType = p.type ? p.type.toLowerCase().includes(q) : false;
-      const matchStatus = p.status ? p.status.toLowerCase().includes(q) : false;
-      const matchDescription = p.description ? p.description.toLowerCase().includes(q) : false;
-      const matchExpiry = p.expiryDate ? p.expiryDate.toLowerCase().includes(q) : false;
-      
-      const matchClientEmail = client && client.email ? client.email.toLowerCase().includes(q) : false;
-      const matchClientPhone = client && client.phone ? client.phone.toLowerCase().includes(q) : false;
-      const matchClientId = client && client.id ? client.id.toLowerCase().includes(q) : false;
-      
-      const matchPremium = p.premiumAmount ? p.premiumAmount.toString().toLowerCase().includes(q) : false;
-      const matchSum = p.sumAssured ? p.sumAssured.toString().toLowerCase().includes(q) : false;
-
-      return (
-        matchPolicyNumber ||
-        matchClientName ||
-        matchType ||
-        matchStatus ||
-        matchDescription ||
-        matchExpiry ||
-        matchClientEmail ||
-        matchClientPhone ||
-        matchClientId ||
-        matchPremium ||
-        matchSum
-      );
+      return {
+        ...p,
+        clientEmail: client ? client.email : '',
+        clientPhone: client ? client.phone : '',
+        scheduleDocument: scheduleDoc || null
+      };
     });
+
+    res.json(policiesWithDocs);
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching policies', error: error.message });
   }
-
-  if (type && type !== 'All') {
-    policies = policies.filter(p => p.type.toLowerCase() === type.toLowerCase());
-  }
-
-  if (status && status !== 'All') {
-    policies = policies.filter(p => p.status.toLowerCase() === status.toLowerCase());
-  }
-
-  // Sort by created date or number
-  policies.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-
-  // Attach client details and policy schedule document if it exists
-  const documents = readTable('documents');
-  const clients = readTable('clients');
-  const policiesWithDocs = policies.map(p => {
-    const scheduleDoc = documents.find(d => d.policyId === p.id && d.documentType === 'Policy Schedule');
-    const client = clients.find(c => c.id === p.clientId);
-    return {
-      ...p,
-      clientEmail: client ? client.email : '',
-      clientPhone: client ? client.phone : '',
-      scheduleDocument: scheduleDoc || null
-    };
-  });
-
-  res.json(policiesWithDocs);
 });
 
 // GET /api/policies/:id
-router.get('/:id', authMiddleware, (req, res) => {
-  const policies = readTable('policies');
-  const policy = policies.find(p => p.id === req.params.id);
-  if (!policy) {
-    return res.status(404).json({ message: 'Policy not found' });
+router.get('/:id', authMiddleware, async (req, res) => {
+  try {
+    const db = getDb();
+    const policy = await db.collection('policies').findOne({ id: req.params.id });
+    if (!policy) {
+      return res.status(404).json({ message: 'Policy not found' });
+    }
+
+    // Fetch client details
+    const client = await db.collection('clients').findOne({ id: policy.clientId });
+
+    // Fetch related documents
+    const policyDocs = await db.collection('documents').find({ policyId: policy.id }).toArray();
+
+    res.json({
+      ...policy,
+      clientDetails: client || null,
+      documents: policyDocs
+    });
+  } catch (error) {
+    res.status(500).json({ message: 'Error fetching policy details', error: error.message });
   }
-
-  // Fetch client details
-  const clients = readTable('clients');
-  const client = clients.find(c => c.id === policy.clientId);
-
-  // Fetch related documents
-  const documents = readTable('documents');
-  const policyDocs = documents.filter(d => d.policyId === policy.id);
-
-  res.json({
-    ...policy,
-    clientDetails: client || null,
-    documents: policyDocs
-  });
 });
 
 // POST /api/policies
-router.post('/', authMiddleware, upload.single('file'), (req, res) => {
+router.post('/', authMiddleware, upload.single('file'), async (req, res) => {
   const { clientId, type, premiumAmount, sumAssured, expiryDate, status, description } = req.body;
   
   if (!clientId || !type || !premiumAmount || !sumAssured || !expiryDate) {
-    // If file was uploaded but validation fails, clean up the file
     if (req.file) {
       try { fs.unlinkSync(req.file.path); } catch (e) {}
     }
     return res.status(400).json({ message: 'Required fields: clientId, type, premiumAmount, sumAssured, expiryDate' });
   }
 
-  const clients = readTable('clients');
-  const client = clients.find(c => c.id === clientId);
-  if (!client) {
-    if (req.file) {
-      try { fs.unlinkSync(req.file.path); } catch (e) {}
+  try {
+    const db = getDb();
+    const client = await db.collection('clients').findOne({ id: clientId });
+    if (!client) {
+      if (req.file) {
+        try { fs.unlinkSync(req.file.path); } catch (e) {}
+      }
+      return res.status(404).json({ message: 'Client not found' });
     }
-    return res.status(404).json({ message: 'Client not found' });
+
+    const newPolicy = {
+      id: 'pol-' + Math.floor(100000 + Math.random() * 900000),
+      policyNumber: 'POL-' + Math.floor(100000000 + Math.random() * 900000000),
+      clientName: client.name,
+      clientId: client.id,
+      type,
+      premiumAmount: Number(premiumAmount),
+      sumAssured: Number(sumAssured),
+      expiryDate,
+      status: status || 'Active',
+      description: description || '',
+      kycVerified: false,
+      createdAt: new Date().toISOString()
+    };
+
+    await db.collection('policies').insertOne(newPolicy);
+
+    // If a file is uploaded, add it to documents vault linked to this policy
+    if (req.file) {
+      const bytes = req.file.size;
+      let formattedSize = '0 Bytes';
+      if (bytes > 0) {
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        formattedSize = parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+      }
+
+      const newDoc = {
+        id: 'doc-' + uuidv4(),
+        policyId: newPolicy.id,
+        clientId: newPolicy.clientId,
+        documentName: 'Policy Schedule PDF',
+        documentType: 'Policy Schedule',
+        filePath: `uploads/${req.file.filename}`,
+        fileSize: formattedSize,
+        uploadedAt: new Date().toISOString()
+      };
+      await db.collection('documents').insertOne(newDoc);
+    }
+
+    // Update client's active policy count
+    if (newPolicy.status === 'Active') {
+      await db.collection('clients').updateOne(
+        { id: client.id },
+        { $inc: { activePoliciesCount: 1 } }
+      );
+    }
+
+    // Log activity
+    const activity = {
+      id: 'act-' + uuidv4(),
+      logText: `New ${type} Policy Issued for ${client.name} (Policy: ${newPolicy.policyNumber})${req.file ? ' with PDF schedule' : ''}`,
+      timestamp: new Date().toISOString(),
+      type: 'success'
+    };
+    await db.collection('activities').insertOne(activity);
+
+    // Keep last 50 activities
+    const acts = await db.collection('activities').find({}).sort({ timestamp: -1 }).toArray();
+    if (acts.length > 50) {
+      const toDeleteIds = acts.slice(50).map(a => a.id);
+      await db.collection('activities').deleteMany({ id: { $in: toDeleteIds } });
+    }
+
+    res.status(201).json(newPolicy);
+  } catch (error) {
+    res.status(500).json({ message: 'Error issuing policy', error: error.message });
+  }
+});
+
+// PUT /api/policies/:id
+router.put('/:id', authMiddleware, async (req, res) => {
+  try {
+    const db = getDb();
+    const oldPolicy = await db.collection('policies').findOne({ id: req.params.id });
+    if (!oldPolicy) {
+      return res.status(404).json({ message: 'Policy not found' });
+    }
+
+    const { type, premiumAmount, sumAssured, expiryDate, status, description, kycVerified } = req.body;
+    const updatedFields = {};
+    if (type !== undefined) updatedFields.type = type;
+    if (premiumAmount !== undefined) updatedFields.premiumAmount = Number(premiumAmount);
+    if (sumAssured !== undefined) updatedFields.sumAssured = Number(sumAssured);
+    if (expiryDate !== undefined) updatedFields.expiryDate = expiryDate;
+    if (status !== undefined) updatedFields.status = status;
+    if (description !== undefined) updatedFields.description = description;
+    if (kycVerified !== undefined) updatedFields.kycVerified = kycVerified;
+
+    await db.collection('policies').updateOne({ id: req.params.id }, { $set: updatedFields });
+    const updatedPolicy = { ...oldPolicy, ...updatedFields };
+
+    // Adjust client active policies count if status changed
+    if (status && oldPolicy.status !== status) {
+      if (status === 'Active' && oldPolicy.status !== 'Active') {
+        await db.collection('clients').updateOne({ id: oldPolicy.clientId }, { $inc: { activePoliciesCount: 1 } });
+      } else if (status !== 'Active' && oldPolicy.status === 'Active') {
+        await db.collection('clients').updateOne({ id: oldPolicy.clientId }, { $inc: { activePoliciesCount: -1 } });
+      }
+    }
+
+    // Log activity
+    const activity = {
+      id: 'act-' + uuidv4(),
+      logText: `Policy details updated: ${updatedPolicy.policyNumber}`,
+      timestamp: new Date().toISOString(),
+      type: 'info'
+    };
+    await db.collection('activities').insertOne(activity);
+
+    delete updatedPolicy._id;
+    res.json(updatedPolicy);
+  } catch (error) {
+    res.status(500).json({ message: 'Error updating policy', error: error.message });
+  }
+});
+
+// DELETE /api/policies/:id
+router.delete('/:id', authMiddleware, async (req, res) => {
+  try {
+    const db = getDb();
+    const policyToDelete = await db.collection('policies').findOne({ id: req.params.id });
+    if (!policyToDelete) {
+      return res.status(404).json({ message: 'Policy not found' });
+    }
+
+    await db.collection('policies').deleteOne({ id: req.params.id });
+
+    // Decrement client active policies count
+    if (policyToDelete.status === 'Active') {
+      await db.collection('clients').updateOne(
+        { id: policyToDelete.clientId },
+        { $inc: { activePoliciesCount: -1 } }
+      );
+    }
+
+    // Cleanup documents associated with policy
+    const policyDocs = await db.collection('documents').find({ policyId: req.params.id }).toArray();
+    await db.collection('documents').deleteMany({ policyId: req.params.id });
+
+    // Delete physical files
+    policyDocs.forEach(d => {
+      const fullPath = path.join(__dirname, '..', d.filePath);
+      if (fs.existsSync(fullPath)) {
+        try { fs.unlinkSync(fullPath); } catch (err) {}
+      }
+    });
+
+    // Log activity
+    const activity = {
+      id: 'act-' + uuidv4(),
+      logText: `Policy deleted: ${policyToDelete.policyNumber}`,
+      timestamp: new Date().toISOString(),
+      type: 'danger'
+    };
+    await db.collection('activities').insertOne(activity);
+
+    res.json({ message: 'Policy deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error deleting policy', error: error.message });
+  }
+});
+
+// POST /api/policies/:id/documents/upload
+router.post('/:id/documents/upload', authMiddleware, upload.single('file'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ message: 'No file uploaded' });
   }
 
-  const policies = readTable('policies');
-  const newPolicy = {
-    id: 'pol-' + Math.floor(100000 + Math.random() * 900000), // e.g. pol-123456
-    policyNumber: 'POL-' + Math.floor(100000000 + Math.random() * 900000000), // e.g. POL-987654321
-    clientName: client.name,
-    clientId: client.id,
-    type,
-    premiumAmount: Number(premiumAmount),
-    sumAssured: Number(sumAssured),
-    expiryDate,
-    status: status || 'Active',
-    description: description || '',
-    kycVerified: false,
-    createdAt: new Date().toISOString()
-  };
+  try {
+    const db = getDb();
+    const policy = await db.collection('policies').findOne({ id: req.params.id });
+    if (!policy) {
+      fs.unlinkSync(req.file.path);
+      return res.status(404).json({ message: 'Policy not found' });
+    }
 
-  policies.push(newPolicy);
-  writeTable('policies', policies);
+    const { documentType, documentName } = req.body;
+    if (!documentType) {
+      fs.unlinkSync(req.file.path);
+      return res.status(400).json({ message: 'documentType is required' });
+    }
 
-  // If a file is uploaded, add it to documents vault linked to this policy
-  if (req.file) {
-    const documents = readTable('documents');
     const bytes = req.file.size;
     let formattedSize = '0 Bytes';
     if (bytes > 0) {
@@ -167,244 +337,76 @@ router.post('/', authMiddleware, upload.single('file'), (req, res) => {
       formattedSize = parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
     }
 
+    const relativePath = `uploads/${req.file.filename}`;
+
     const newDoc = {
       id: 'doc-' + uuidv4(),
-      policyId: newPolicy.id,
-      clientId: newPolicy.clientId,
-      documentName: 'Policy Schedule PDF',
-      documentType: 'Policy Schedule',
-      filePath: `uploads/${req.file.filename}`,
+      policyId: policy.id,
+      clientId: policy.clientId,
+      documentName: documentName || req.file.originalname,
+      documentType,
+      filePath: relativePath,
       fileSize: formattedSize,
       uploadedAt: new Date().toISOString()
     };
-    documents.push(newDoc);
-    writeTable('documents', documents);
-  }
 
-  // Update client's active policy count
-  if (newPolicy.status === 'Active') {
-    client.activePoliciesCount = (client.activePoliciesCount || 0) + 1;
-    writeTable('clients', clients);
-  }
+    await db.collection('documents').insertOne(newDoc);
 
-  // Log activity
-  const activities = readTable('activities');
-  activities.unshift({
-    id: 'act-' + uuidv4(),
-    logText: `New ${type} Policy Issued for ${client.name} (Policy: ${newPolicy.policyNumber})${req.file ? ' with PDF schedule' : ''}`,
-    timestamp: new Date().toISOString(),
-    type: 'success'
-  });
-  writeTable('activities', activities.slice(0, 50));
-
-  res.status(201).json(newPolicy);
-});
-
-// PUT /api/policies/:id
-router.put('/:id', authMiddleware, (req, res) => {
-  const policies = readTable('policies');
-  const idx = policies.findIndex(p => p.id === req.params.id);
-  if (idx === -1) {
-    return res.status(404).json({ message: 'Policy not found' });
-  }
-
-  const { type, premiumAmount, sumAssured, expiryDate, status, description, kycVerified } = req.body;
-  const oldPolicy = policies[idx];
-
-  const updatedPolicy = {
-    ...oldPolicy,
-    type: type || oldPolicy.type,
-    premiumAmount: premiumAmount !== undefined ? Number(premiumAmount) : oldPolicy.premiumAmount,
-    sumAssured: sumAssured !== undefined ? Number(sumAssured) : oldPolicy.sumAssured,
-    expiryDate: expiryDate || oldPolicy.expiryDate,
-    status: status || oldPolicy.status,
-    description: description !== undefined ? description : oldPolicy.description,
-    kycVerified: kycVerified !== undefined ? kycVerified : oldPolicy.kycVerified
-  };
-
-  policies[idx] = updatedPolicy;
-  writeTable('policies', policies);
-
-  // Adjust client active policies count if status changed
-  if (oldPolicy.status !== updatedPolicy.status) {
-    const clients = readTable('clients');
-    const client = clients.find(c => c.id === updatedPolicy.clientId);
-    if (client) {
-      if (updatedPolicy.status === 'Active' && oldPolicy.status !== 'Active') {
-        client.activePoliciesCount = (client.activePoliciesCount || 0) + 1;
-      } else if (updatedPolicy.status !== 'Active' && oldPolicy.status === 'Active') {
-        client.activePoliciesCount = Math.max(0, (client.activePoliciesCount || 0) - 1);
-      }
-      writeTable('clients', clients);
+    // If Aadhaar or PAN is uploaded, check if we need to auto mark kycVerified as true
+    const docsForPolicy = await db.collection('documents').find({ policyId: policy.id }).toArray();
+    const hasAadhaar = docsForPolicy.some(d => d.documentType.toLowerCase() === 'aadhaar');
+    const hasPAN = docsForPolicy.some(d => d.documentType.toLowerCase() === 'pan');
+    if (hasAadhaar && hasPAN && !policy.kycVerified) {
+      await db.collection('policies').updateOne({ id: policy.id }, { $set: { kycVerified: true } });
     }
+
+    res.status(201).json(newDoc);
+  } catch (error) {
+    res.status(500).json({ message: 'Error uploading document', error: error.message });
   }
-
-  // Log activity
-  const activities = readTable('activities');
-  activities.unshift({
-    id: 'act-' + uuidv4(),
-    logText: `Policy details updated: ${updatedPolicy.policyNumber}`,
-    timestamp: new Date().toISOString(),
-    type: 'info'
-  });
-  writeTable('activities', activities.slice(0, 50));
-
-  res.json(updatedPolicy);
-});
-
-// DELETE /api/policies/:id
-router.delete('/:id', authMiddleware, (req, res) => {
-  const policies = readTable('policies');
-  const policyToDelete = policies.find(p => p.id === req.params.id);
-  if (!policyToDelete) {
-    return res.status(404).json({ message: 'Policy not found' });
-  }
-
-  const filteredPolicies = policies.filter(p => p.id !== req.params.id);
-  writeTable('policies', filteredPolicies);
-
-  // Decrement client active policies count
-  if (policyToDelete.status === 'Active') {
-    const clients = readTable('clients');
-    const client = clients.find(c => c.id === policyToDelete.clientId);
-    if (client) {
-      client.activePoliciesCount = Math.max(0, (client.activePoliciesCount || 0) - 1);
-      writeTable('clients', clients);
-    }
-  }
-
-  // Cleanup documents associated with policy
-  const documents = readTable('documents');
-  const policyDocs = documents.filter(d => d.policyId === req.params.id);
-  const remainingDocs = documents.filter(d => d.policyId !== req.params.id);
-  writeTable('documents', remainingDocs);
-
-  // Delete physical files
-  policyDocs.forEach(d => {
-    const fullPath = path.join(__dirname, '..', d.filePath);
-    if (fs.existsSync(fullPath)) {
-      try {
-        fs.unlinkSync(fullPath);
-      } catch (err) {
-        console.error(`Failed to delete file: ${fullPath}`, err);
-      }
-    }
-  });
-
-  const activities = readTable('activities');
-  activities.unshift({
-    id: 'act-' + uuidv4(),
-    logText: `Policy deleted: ${policyToDelete.policyNumber}`,
-    timestamp: new Date().toISOString(),
-    type: 'danger'
-  });
-  writeTable('activities', activities.slice(0, 50));
-
-  res.json({ message: 'Policy deleted successfully' });
-});
-
-// POST /api/policies/:id/documents/upload
-router.post('/:id/documents/upload', authMiddleware, upload.single('file'), (req, res) => {
-  if (!req.file) {
-    return res.status(400).json({ message: 'No file uploaded' });
-  }
-
-  const policies = readTable('policies');
-  const policy = policies.find(p => p.id === req.params.id);
-  if (!policy) {
-    // Cleanup physical file if policy is not found
-    fs.unlinkSync(req.file.path);
-    return res.status(404).json({ message: 'Policy not found' });
-  }
-
-  const { documentType, documentName } = req.body;
-  if (!documentType) {
-    fs.unlinkSync(req.file.path);
-    return res.status(400).json({ message: 'documentType is required' });
-  }
-
-  const documents = readTable('documents');
-  
-  // Format file size
-  const bytes = req.file.size;
-  let formattedSize = '0 Bytes';
-  if (bytes > 0) {
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    formattedSize = parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-  }
-
-  const relativePath = `uploads/${req.file.filename}`;
-
-  const newDoc = {
-    id: 'doc-' + uuidv4(),
-    policyId: policy.id,
-    clientId: policy.clientId,
-    documentName: documentName || req.file.originalname,
-    documentType, // Aadhaar, PAN, Policy Schedule, Receipt, Other
-    filePath: relativePath,
-    fileSize: formattedSize,
-    uploadedAt: new Date().toISOString()
-  };
-
-  documents.push(newDoc);
-  writeTable('documents', documents);
-
-  // If Aadhaar or PAN is uploaded, check if we need to auto mark kycVerified as true
-  const docsForPolicy = documents.filter(d => d.policyId === policy.id);
-  const hasAadhaar = docsForPolicy.some(d => d.documentType.toLowerCase() === 'aadhaar');
-  const hasPAN = docsForPolicy.some(d => d.documentType.toLowerCase() === 'pan');
-  if (hasAadhaar && hasPAN && !policy.kycVerified) {
-    policy.kycVerified = true;
-    writeTable('policies', policies);
-  }
-
-  res.status(201).json(newDoc);
 });
 
 // DELETE /api/policies/:id/documents/:docId
-router.delete('/:id/documents/:docId', authMiddleware, (req, res) => {
-  const documents = readTable('documents');
-  const docIdx = documents.findIndex(d => d.id === req.params.docId && d.policyId === req.params.id);
-  if (docIdx === -1) {
-    return res.status(404).json({ message: 'Document not found' });
-  }
-
-  const doc = documents[docIdx];
-  const fullPath = path.join(__dirname, '..', doc.filePath);
-  
-  // Remove record
-  const filteredDocs = documents.filter(d => d.id !== req.params.docId);
-  writeTable('documents', filteredDocs);
-
-  // Delete physical file
-  if (fs.existsSync(fullPath)) {
-    try {
-      fs.unlinkSync(fullPath);
-    } catch (err) {
-      console.error(`Failed to delete physical file: ${fullPath}`, err);
+router.delete('/:id/documents/:docId', authMiddleware, async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('documents').findOne({ id: req.params.docId, policyId: req.params.id });
+    if (!doc) {
+      return res.status(404).json({ message: 'Document not found' });
     }
-  }
 
-  res.json({ message: 'Document deleted successfully' });
+    const fullPath = path.join(__dirname, '..', doc.filePath);
+    await db.collection('documents').deleteOne({ id: req.params.docId });
+
+    // Delete physical file
+    if (fs.existsSync(fullPath)) {
+      try { fs.unlinkSync(fullPath); } catch (err) {}
+    }
+
+    res.json({ message: 'Document deleted successfully' });
+  } catch (error) {
+    res.status(500).json({ message: 'Error deleting document', error: error.message });
+  }
 });
 
 // GET /api/policies/documents/download/:docId
-router.get('/documents/download/:docId', (req, res) => {
-  const documents = readTable('documents');
-  const doc = documents.find(d => d.id === req.params.docId);
-  if (!doc) {
-    return res.status(404).json({ message: 'Document not found' });
-  }
+router.get('/documents/download/:docId', async (req, res) => {
+  try {
+    const db = getDb();
+    const doc = await db.collection('documents').findOne({ id: req.params.docId });
+    if (!doc) {
+      return res.status(404).json({ message: 'Document not found' });
+    }
 
-  const fullPath = path.join(__dirname, '..', doc.filePath);
-  if (!fs.existsSync(fullPath)) {
-    return res.status(404).json({ message: 'Physical file not found on server' });
-  }
+    const fullPath = path.join(__dirname, '..', doc.filePath);
+    if (!fs.existsSync(fullPath)) {
+      return res.status(404).json({ message: 'Physical file not found on server' });
+    }
 
-  // Force browser file download dialog
-  res.download(fullPath, doc.documentName + path.extname(doc.filePath));
+    res.download(fullPath, doc.documentName + path.extname(doc.filePath));
+  } catch (error) {
+    res.status(500).json({ message: 'Error downloading document', error: error.message });
+  }
 });
 
 module.exports = router;
