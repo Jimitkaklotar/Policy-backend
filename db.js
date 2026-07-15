@@ -48,7 +48,7 @@ const connectDB = async () => {
     await mongoClient.connect();
     dbConnection = mongoClient.db(DB_NAME);
     isConnected = true;
-    console.log("Successfully connected to MongoDB Atlas!");
+    console.log("mongodb connected");
 
     // Preload all tables from cloud database
     const tables = Object.keys(dbCache);
