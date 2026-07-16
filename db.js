@@ -5,6 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcryptjs');
 const { MongoClient } = require('mongodb');
+const { sendMailNotification } = require('./utils/mailer');
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
@@ -61,6 +62,9 @@ const connectDB = async () => {
 
     // Seed default records if collections are empty
     await seedDatabase();
+
+    // Start background daily email notification scheduler
+    startDailyAlertScheduler();
   } catch (error) {
     console.error("Failed to connect to MongoDB Atlas:", error);
     throw error;
@@ -401,6 +405,140 @@ const seedDatabase = async () => {
     ];
     await writeTable('activities', initialActivities);
   }
+};
+
+const runDailyNotificationCheck = async () => {
+  try {
+    if (!dbConnection) return;
+    console.log("[Scheduler] Running daily alert notification checks...");
+
+    const clients = await dbConnection.collection('clients').find({}).toArray();
+    const policies = await dbConnection.collection('policies').find({}).toArray();
+
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayMMDD = today.toISOString().slice(5, 10); // "MM-DD"
+    const todayStr = today.toISOString().split('T')[0]; // "YYYY-MM-DD"
+
+    // Prevent duplicate notification emails in the same day
+    const metadataCol = dbConnection.collection('metadata');
+    const trackingDoc = await metadataCol.findOne({ key: 'last_daily_notification_date' });
+    if (trackingDoc && trackingDoc.value === todayStr) {
+      console.log(`[Scheduler] Daily digest email has already been sent for today (${todayStr}). Skipping.`);
+      return;
+    }
+
+    // 1. Birthdays today
+    const birthdayClients = clients.filter(c => {
+      if (!c.dob) return false;
+      const dobMMDD = c.dob.slice(5, 10);
+      return dobMMDD === todayMMDD;
+    });
+
+    // 2. Policies expiring in exactly 30, 15, or 7 days
+    const expiringPolicies = policies.filter(p => {
+      if (p.status !== 'Active') return false;
+      const expiry = new Date(p.expiryDate);
+      const diffTime = expiry - today;
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      return diffDays === 30 || diffDays === 15 || diffDays === 7;
+    }).map(p => {
+      const expiry = new Date(p.expiryDate);
+      const diffTime = expiry - today;
+      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      return { ...p, daysLeft: diffDays };
+    });
+
+    // If no birthdays and no expiries, log and write trackingDoc to skip sending blank email
+    if (birthdayClients.length === 0 && expiringPolicies.length === 0) {
+      console.log("[Scheduler] No daily alerts (birthdays or expiries) found for today.");
+      await metadataCol.updateOne(
+        { key: 'last_daily_notification_date' },
+        { $set: { value: todayStr } },
+        { upsert: true }
+      );
+      return;
+    }
+
+    // 3. Build stylized HTML content for email digest
+    let htmlContent = `
+      <p>Dear Jimit,</p>
+      <p>Here is your daily TrustAssure CRM automated notification summary for today, <strong>${today.toDateString()}</strong>:</p>
+    `;
+
+    if (birthdayClients.length > 0) {
+      htmlContent += `
+        <h3 style="color: #004DC0; border-bottom: 2px solid #004DC0; padding-bottom: 5px; margin-top: 25px;">🎂 Birthdays Today</h3>
+        <p>The following clients are celebrating their birthday today. You can send them a warm greeting!</p>
+        <ul style="padding-left: 20px; line-height: 1.8;">
+      `;
+      birthdayClients.forEach(c => {
+        htmlContent += `
+          <li>
+            <strong>${c.name}</strong> 
+            (Phone: <a href="tel:${c.phone}">${c.phone || 'N/A'}</a> | 
+            Email: <a href="mailto:${c.email}">${c.email || 'N/A'}</a>)
+          </li>
+        `;
+      });
+      htmlContent += `</ul>`;
+    }
+
+    if (expiringPolicies.length > 0) {
+      htmlContent += `
+        <h3 style="color: #EF4444; border-bottom: 2px solid #EF4444; padding-bottom: 5px; margin-top: 25px;">⚠️ Upcoming Policy Expiries</h3>
+        <p>The following active insurance policies are due for renewal soon:</p>
+        <table style="width: 100%; border-collapse: collapse; margin-top: 10px;">
+          <thead>
+            <tr style="background-color: #f8fafc; border-bottom: 1px solid #e2e8f0;">
+              <th style="padding: 10px 8px; text-align: left; font-size: 13px; font-weight: bold; color: #475569;">Policy Number</th>
+              <th style="padding: 10px 8px; text-align: left; font-size: 13px; font-weight: bold; color: #475569;">Client Name</th>
+              <th style="padding: 10px 8px; text-align: left; font-size: 13px; font-weight: bold; color: #475569;">Policy Type</th>
+              <th style="padding: 10px 8px; text-align: left; font-size: 13px; font-weight: bold; color: #475569;">Expiry Date</th>
+              <th style="padding: 10px 8px; text-align: left; font-size: 13px; font-weight: bold; color: #475569;">Days Left</th>
+            </tr>
+          </thead>
+          <tbody>
+      `;
+      expiringPolicies.forEach(p => {
+        htmlContent += `
+          <tr style="border-bottom: 1px solid #f1f5f9; font-size: 14px;">
+            <td style="padding: 10px 8px; font-weight: bold; color: #004DC0;">${p.policyNumber}</td>
+            <td style="padding: 10px 8px;">${p.clientName}</td>
+            <td style="padding: 10px 8px;">${p.type}</td>
+            <td style="padding: 10px 8px; color: #475569;">${p.expiryDate}</td>
+            <td style="padding: 10px 8px; font-weight: bold; color: #EF4444;">${p.daysLeft} days left</td>
+          </tr>
+        `;
+      });
+      htmlContent += `
+          </tbody>
+        </table>
+      `;
+    }
+
+    const subject = `TrustAssure CRM - Daily Dashboard Alerts (${todayStr})`;
+    const success = await sendMailNotification("jimitkaklotar786@gmail.com", subject, "Daily CRM Alerts Summary", htmlContent);
+    
+    if (success) {
+      await metadataCol.updateOne(
+        { key: 'last_daily_notification_date' },
+        { $set: { value: todayStr } },
+        { upsert: true }
+      );
+      console.log(`[Scheduler] Daily notification email dispatched successfully for ${todayStr}.`);
+    }
+  } catch (error) {
+    console.error("[Scheduler] Daily notification check execution failed:", error);
+  }
+};
+
+const startDailyAlertScheduler = () => {
+  // Run once immediately on startup
+  runDailyNotificationCheck();
+
+  // Set interval to check every 12 hours
+  setInterval(runDailyNotificationCheck, 12 * 60 * 60 * 1000);
 };
 
 const getDb = () => {
