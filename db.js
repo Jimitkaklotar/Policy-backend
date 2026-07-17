@@ -236,6 +236,7 @@ const seedDatabase = async () => {
         clientName: 'Rahul Sharma',
         clientId: 'c1',
         type: 'Life',
+        company: 'LIC',
         premiumAmount: 24500,
         sumAssured: 15000000, // 1.5 Cr
         expiryDate: '2026-10-15', // far expiry
@@ -250,6 +251,7 @@ const seedDatabase = async () => {
         clientName: 'Patel Family',
         clientId: 'c2',
         type: 'Life',
+        company: 'Tata AIG',
         premiumAmount: 48000,
         sumAssured: 20000000, // 2 Cr
         expiryDate: addDays(today, 15), // Expiring in 15 days
@@ -264,6 +266,7 @@ const seedDatabase = async () => {
         clientName: 'Alice Smith',
         clientId: 'c3',
         type: 'Auto',
+        company: 'HDFC Ergo',
         premiumAmount: 12500,
         sumAssured: 1500000,
         expiryDate: addDays(today, 7), // Expiring in 7 days (URGENT RENEWAL)
@@ -278,6 +281,7 @@ const seedDatabase = async () => {
         clientName: 'Carol Davis',
         clientId: 'c5',
         type: 'Health',
+        company: 'ICICI Lombard',
         premiumAmount: 32000,
         sumAssured: 10000000,
         expiryDate: addDays(today, 30), // Expiring in 30 days

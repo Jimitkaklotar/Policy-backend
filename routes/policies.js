@@ -59,6 +59,7 @@ router.get('/', authMiddleware, async (req, res) => {
         
         const matchPremium = p.premiumAmount ? p.premiumAmount.toString().toLowerCase().includes(q) : false;
         const matchSum = p.sumAssured ? p.sumAssured.toString().toLowerCase().includes(q) : false;
+        const matchCompany = p.company ? p.company.toLowerCase().includes(q) : false;
 
         return (
           matchPolicyNumber ||
@@ -71,7 +72,8 @@ router.get('/', authMiddleware, async (req, res) => {
           matchClientPhone ||
           matchClientId ||
           matchPremium ||
-          matchSum
+          matchSum ||
+          matchCompany
         );
       });
     }
@@ -126,7 +128,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
 
 // POST /api/policies
 router.post('/', authMiddleware, upload.single('file'), async (req, res) => {
-  const { clientId, type, premiumAmount, sumAssured, expiryDate, status, description } = req.body;
+  const { clientId, type, premiumAmount, sumAssured, expiryDate, status, description, company } = req.body;
   
   if (!clientId || !type || !premiumAmount || !sumAssured || !expiryDate) {
     if (req.file) {
@@ -151,6 +153,7 @@ router.post('/', authMiddleware, upload.single('file'), async (req, res) => {
       clientName: client.name,
       clientId: client.id,
       type,
+      company: company || '',
       premiumAmount: Number(premiumAmount),
       sumAssured: Number(sumAssured),
       expiryDate,
@@ -262,7 +265,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
       return res.status(404).json({ message: 'Policy not found' });
     }
 
-    const { type, premiumAmount, sumAssured, expiryDate, status, description, kycVerified } = req.body;
+    const { type, premiumAmount, sumAssured, expiryDate, status, description, kycVerified, company } = req.body;
     const updatedFields = {};
     if (type !== undefined) updatedFields.type = type;
     if (premiumAmount !== undefined) updatedFields.premiumAmount = Number(premiumAmount);
@@ -271,6 +274,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
     if (status !== undefined) updatedFields.status = status;
     if (description !== undefined) updatedFields.description = description;
     if (kycVerified !== undefined) updatedFields.kycVerified = kycVerified;
+    if (company !== undefined) updatedFields.company = company;
 
     await db.collection('policies').updateOne({ id: req.params.id }, { $set: updatedFields });
     const updatedPolicy = { ...oldPolicy, ...updatedFields };
