@@ -51,7 +51,14 @@ const startServer = async () => {
   try {
     await connectDB();
     app.listen(PORT, () => {
-      console.log(`Backend server is running on http://localhost:${PORT}`);
+      console.log(`\n======================================================`);
+      console.log(`  🚀 WELCOME TO TRUSTASSURE BROKER PORTAL BACKEND 🚀  `);
+      console.log(`======================================================`);
+      console.log(`  Status: Server initialized and ready!`);
+      console.log(`  URL: http://localhost:${PORT}`);
+      console.log(`  Database: MongoDB Atlas Connected`);
+      console.log(`  Automated Scheduler: Active (Daily Digests)`);
+      console.log(`======================================================\n`);
     });
   } catch (error) {
     console.error('Failed to start TrustAssure server:', error);
