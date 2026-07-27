@@ -12,9 +12,13 @@ const taskRoutes = require('./routes/tasks');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Enable CORS for frontend Vite port 5173
+// Enable CORS for local development and production domains
 app.use(cors({
-  origin: 'http://localhost:5173',
+  origin: [
+    'http://localhost:5173',
+    'https://www.trustassure.webbytouch.com',
+    'https://trustassure.webbytouch.com'
+  ],
   credentials: true
 }));
 
