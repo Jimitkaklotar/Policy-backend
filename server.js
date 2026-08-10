@@ -8,6 +8,7 @@ const dashboardRoutes = require('./routes/dashboard');
 const clientRoutes = require('./routes/clients');
 const policyRoutes = require('./routes/policies');
 const taskRoutes = require('./routes/tasks');
+const vaultRoutes = require('./routes/vault');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -43,6 +44,7 @@ app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/clients', clientRoutes);
 app.use('/api/policies', policyRoutes);
 app.use('/api/tasks', taskRoutes);
+app.use('/api/vault', vaultRoutes);
 
 // Root endpoint welcome landing page
 app.get('/', (req, res) => {

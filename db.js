@@ -36,7 +36,10 @@ const dbCache = {
   policies: [],
   documents: [],
   tasks: [],
-  activities: []
+  activities: [],
+  vault: [],
+  dismissedAlerts: [],
+  generatedAlerts: []
 };
 
 let dbConnection = null;
@@ -58,6 +61,18 @@ const connectDB = async () => {
       const data = await collection.find({}).toArray();
       dbCache[table] = data;
       console.log(`Preloaded table '${table}': ${data.length} records`);
+    }
+
+    // Force update clients and policies seed if old seeds exist or schemas are outdated
+    if (
+      dbCache.clients.some(c => c.id === 'c4' || c.id === 'c5' || c.id === 'c1' || c.id === 'c2') ||
+      dbCache.policies.some(p => !p.issueDate || p.clientId === 'c1' || p.clientId === 'c2')
+    ) {
+      console.log("[Seeder] Old seed data or outdated schema detected. Wiping clients and policies collections...");
+      await dbConnection.collection('clients').deleteMany({});
+      await dbConnection.collection('policies').deleteMany({});
+      dbCache.clients = [];
+      dbCache.policies = [];
     }
 
     // Seed default records if collections are empty
@@ -159,58 +174,48 @@ const seedDatabase = async () => {
     
     const initialClients = [
       {
-        id: 'c1',
-        name: 'Rahul Sharma',
-        email: 'rahul.s@example.com',
-        phone: '+91 98765 43210',
-        dob: formattedTodayDob, // Today!
-        activePoliciesCount: 2,
+        id: 'cli-78101',
+        name: 'Arjun Mehta',
+        email: 'arjun.mehta@email.com',
+        phone: '+91 99887 76655',
+        dob: '1993-08-12',
+        activePoliciesCount: 1,
         status: 'Active',
+        followUpDate: 'Call tomorrow morning',
+        followUps: ['Call tomorrow morning', 'Send health insurance quotes'],
+        notes: 'Interested in family floater plans. Budget around 15k-20k INR annually.',
+        productName: 'HDFC Ergo Optima Restore',
         avatar: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
         createdAt: new Date().toISOString()
       },
       {
-        id: 'c2',
-        name: 'Patel Family',
-        email: 'patel.family@example.com',
-        phone: '+91 99887 76655',
-        dob: '1978-11-12',
-        activePoliciesCount: 1,
+        id: 'cli-78102',
+        name: 'Priya Sharma',
+        email: 'priya.sharma@email.com',
+        phone: '+91 98223 34455',
+        dob: '1995-12-05',
+        activePoliciesCount: 0,
         status: 'Active',
-        avatar: 'https://images.unsplash.com/photo-1581579438747-1dc8d17bbce4?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: 'c3',
-        name: 'Alice Smith',
-        email: 'alice.smith@email.com',
-        phone: '(555) 123-4567',
-        dob: '1992-04-15',
-        activePoliciesCount: 2,
-        status: 'Active',
+        followUpDate: 'Follow up next Monday',
+        followUps: ['Follow up next Monday', 'Compare with Tata AIA plan'],
+        notes: 'Wants critical illness cover rider. Has pre-existing thyroid issue.',
+        productName: 'LIC Jeevan Anand',
         avatar: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
         createdAt: new Date().toISOString()
       },
       {
-        id: 'c4',
-        name: 'Bob Johnson',
-        email: 'bjohnson_pro@gmail.com',
-        phone: '(555) 987-6543',
-        dob: '1985-08-22',
-        activePoliciesCount: 0,
-        status: 'Pending',
-        avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: 'c5',
-        name: 'Carol Davis',
-        email: 'c.davis@outlook.com',
-        phone: '(555) 444-1122',
-        dob: '1990-01-20',
-        activePoliciesCount: 3,
+        id: 'cli-78103',
+        name: 'Vikram Singh',
+        email: 'vikram.singh@email.com',
+        phone: '+91 91122 33445',
+        dob: '1988-04-20',
+        activePoliciesCount: 2,
         status: 'Active',
-        avatar: 'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
+        followUpDate: 'Send email on Friday',
+        followUps: ['Send email on Friday'],
+        notes: 'Car insurance renewal due. Looking for zero-depreciation add-on.',
+        productName: 'Tata AIG Auto Secure',
+        avatar: 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80',
         createdAt: new Date().toISOString()
       }
     ];
@@ -233,61 +238,56 @@ const seedDatabase = async () => {
       {
         id: 'p1',
         policyNumber: 'POL-987654321',
-        clientName: 'Rahul Sharma',
-        clientId: 'c1',
+        clientName: 'Arjun Mehta',
+        clientId: 'cli-78101',
         type: 'Life',
+        subType: 'Term Plan',
         company: 'LIC',
-        premiumAmount: 24500,
-        sumAssured: 15000000, // 1.5 Cr
-        expiryDate: '2026-10-15', // far expiry
+        premiumAmount: 0,
+        sumAssured: 0,
+        issueDate: '2021-10-15',
+        expiryDate: '',
         status: 'Active',
-        description: 'Policy coverage for major critical illnesses, permanent disability, and high-sum assurance tailored for high-net-worth individuals.',
+        description: 'Term Life insurance policy with premium rate protection.',
+        code: 'L-TERM-01',
         kycVerified: true,
         createdAt: new Date().toISOString()
       },
       {
         id: 'p2',
         policyNumber: 'POL-112233445',
-        clientName: 'Patel Family',
-        clientId: 'c2',
-        type: 'Life',
+        clientName: 'Priya Sharma',
+        clientId: 'cli-78102',
+        type: 'Mediclaim',
+        subType: 'Mediclaim',
         company: 'Tata AIG',
-        premiumAmount: 48000,
-        sumAssured: 20000000, // 2 Cr
-        expiryDate: addDays(today, 15), // Expiring in 15 days
+        premiumAmount: 0,
+        sumAssured: 0,
+        issueDate: '2025-10-15',
+        expiryDate: addDays(today, 15),
         status: 'Active',
-        description: 'Term Life insurance policy renewal with premium rate protection.',
+        description: 'Comprehensive mediclaim cover for family members.',
+        code: 'M-MED-02',
         kycVerified: true,
         createdAt: new Date().toISOString()
       },
       {
         id: 'p3',
         policyNumber: 'POL-921099887',
-        clientName: 'Alice Smith',
-        clientId: 'c3',
-        type: 'Auto',
+        clientName: 'Vikram Singh',
+        clientId: 'cli-78103',
+        type: 'General',
+        subType: 'Car Insurance',
         company: 'HDFC Ergo',
-        premiumAmount: 12500,
-        sumAssured: 1500000,
-        expiryDate: addDays(today, 7), // Expiring in 7 days (URGENT RENEWAL)
+        premiumAmount: 0,
+        sumAssured: 0,
+        issueDate: '2025-10-15',
+        expiryDate: addDays(today, 7),
         status: 'Active',
         description: 'Comprehensive Auto Insurance with collision and third-party liability cover.',
+        vehicleNumber: 'MH-12-PQ-9999',
+        code: 'V-CAR-99',
         kycVerified: true,
-        createdAt: new Date().toISOString()
-      },
-      {
-        id: 'p4',
-        policyNumber: 'POL-882044556',
-        clientName: 'Carol Davis',
-        clientId: 'c5',
-        type: 'Health',
-        company: 'ICICI Lombard',
-        premiumAmount: 32000,
-        sumAssured: 10000000,
-        expiryDate: addDays(today, 30), // Expiring in 30 days
-        status: 'Active',
-        description: 'Family Floater Health Insurance covering hospitalization and pre/post-natal care.',
-        kycVerified: false,
         createdAt: new Date().toISOString()
       }
     ];
@@ -432,11 +432,18 @@ const runDailyNotificationCheck = async () => {
       return;
     }
 
-    // 1. Birthdays today
+    // 1. Birthdays today (checks both client.dob and policy.dob)
     const birthdayClients = clients.filter(c => {
-      if (!c.dob) return false;
-      const dobMMDD = c.dob.slice(5, 10);
-      return dobMMDD === todayMMDD;
+      if (c.dob) {
+        const dobMMDD = c.dob.slice(5, 10);
+        if (dobMMDD === todayMMDD) return true;
+      }
+      const clientPolicies = policies.filter(p => p.clientId === c.id);
+      return clientPolicies.some(p => {
+        if (!p.dob) return false;
+        const dobMMDD = p.dob.slice(5, 10);
+        return dobMMDD === todayMMDD;
+      });
     });
 
     // 2. Policies expiring in exactly 30, 15, or 7 days

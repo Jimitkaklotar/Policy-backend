@@ -60,6 +60,8 @@ router.get('/', authMiddleware, async (req, res) => {
         const matchPremium = p.premiumAmount ? p.premiumAmount.toString().toLowerCase().includes(q) : false;
         const matchSum = p.sumAssured ? p.sumAssured.toString().toLowerCase().includes(q) : false;
         const matchCompany = p.company ? p.company.toLowerCase().includes(q) : false;
+        const matchCode = p.code ? p.code.toLowerCase().includes(q) : false;
+        const matchVehicleNumber = p.vehicleNumber ? p.vehicleNumber.toLowerCase().includes(q) : false;
 
         return (
           matchPolicyNumber ||
@@ -73,7 +75,9 @@ router.get('/', authMiddleware, async (req, res) => {
           matchClientId ||
           matchPremium ||
           matchSum ||
-          matchCompany
+          matchCompany ||
+          matchCode ||
+          matchVehicleNumber
         );
       });
     }
@@ -128,13 +132,13 @@ router.get('/:id', authMiddleware, async (req, res) => {
 
 // POST /api/policies
 router.post('/', authMiddleware, upload.single('file'), async (req, res) => {
-  const { clientId, type, premiumAmount, sumAssured, expiryDate, status, description, company } = req.body;
+  const { clientId, type, premiumAmount, sumAssured, expiryDate, status, description, company, dob, subType, issueDate, vehicleNumber, code } = req.body;
   
-  if (!clientId || !type || !premiumAmount || !sumAssured || !expiryDate) {
+  if (!clientId || !type) {
     if (req.file) {
       try { fs.unlinkSync(req.file.path); } catch (e) {}
     }
-    return res.status(400).json({ message: 'Required fields: clientId, type, premiumAmount, sumAssured, expiryDate' });
+    return res.status(400).json({ message: 'Required fields: clientId, type' });
   }
 
   try {
@@ -153,12 +157,17 @@ router.post('/', authMiddleware, upload.single('file'), async (req, res) => {
       clientName: client.name,
       clientId: client.id,
       type,
+      subType: subType || '',
       company: company || '',
-      premiumAmount: Number(premiumAmount),
-      sumAssured: Number(sumAssured),
-      expiryDate,
+      premiumAmount: Number(premiumAmount || 0),
+      sumAssured: Number(sumAssured || 0),
+      issueDate: issueDate || '',
+      expiryDate: expiryDate || '',
+      dob: dob || '',
       status: status || 'Active',
       description: description || '',
+      vehicleNumber: vehicleNumber || '',
+      code: code || '',
       kycVerified: false,
       createdAt: new Date().toISOString()
     };
@@ -265,7 +274,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
       return res.status(404).json({ message: 'Policy not found' });
     }
 
-    const { type, premiumAmount, sumAssured, expiryDate, status, description, kycVerified, company } = req.body;
+    const { type, premiumAmount, sumAssured, expiryDate, status, description, kycVerified, company, dob, issueDate, vehicleNumber, code } = req.body;
     const updatedFields = {};
     if (type !== undefined) updatedFields.type = type;
     if (premiumAmount !== undefined) updatedFields.premiumAmount = Number(premiumAmount);
@@ -275,6 +284,10 @@ router.put('/:id', authMiddleware, async (req, res) => {
     if (description !== undefined) updatedFields.description = description;
     if (kycVerified !== undefined) updatedFields.kycVerified = kycVerified;
     if (company !== undefined) updatedFields.company = company;
+    if (dob !== undefined) updatedFields.dob = dob;
+    if (issueDate !== undefined) updatedFields.issueDate = issueDate;
+    if (vehicleNumber !== undefined) updatedFields.vehicleNumber = vehicleNumber;
+    if (code !== undefined) updatedFields.code = code;
 
     await db.collection('policies').updateOne({ id: req.params.id }, { $set: updatedFields });
     const updatedPolicy = { ...oldPolicy, ...updatedFields };
