@@ -125,9 +125,10 @@ const writeTable = (table, data) => {
 // Seed initial database state if empty
 const seedDatabase = async () => {
   // 1. Users
-  if (dbCache.users.length === 0 || !dbCache.users.some(u => u.email === 'jimitkaklotar786@gmail.com')) {
+  if (dbCache.users.length === 0 || !dbCache.users.some(u => u.email === 'maheshnandwani13@gmail.com')) {
     console.log("Seeding users...");
-    const hashedPassword = await bcrypt.hash('admin123', 10);
+    const defaultPassword = await bcrypt.hash('admin123', 10);
+    const maheshPassword = await bcrypt.hash('Preet@13', 10);
     const currentUsers = [...dbCache.users];
     
     if (!currentUsers.some(u => u.username === 'admin')) {
@@ -135,7 +136,7 @@ const seedDatabase = async () => {
         id: '1',
         username: 'admin',
         email: 'admin@trustassure.com',
-        password: hashedPassword,
+        password: defaultPassword,
         name: 'John Doe',
         role: 'Senior Broker',
         avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
@@ -146,22 +147,28 @@ const seedDatabase = async () => {
         id: '2',
         username: 'alex',
         email: 'alex@trustassure.com',
-        password: hashedPassword,
+        password: defaultPassword,
         name: 'Alex Sterling',
         role: 'Senior Broker',
         avatar: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
       });
     }
-    if (!currentUsers.some(u => u.email === 'jimitkaklotar786@gmail.com')) {
+    
+    const existingMahesh = currentUsers.find(u => u.email === 'maheshnandwani13@gmail.com');
+    if (!existingMahesh) {
       currentUsers.push({
         id: '3',
-        username: 'jimit',
-        email: 'jimitkaklotar786@gmail.com',
-        password: hashedPassword,
-        name: 'Jimit Kaklotar',
+        username: 'mahesh',
+        email: 'maheshnandwani13@gmail.com',
+        password: maheshPassword,
+        name: 'Mahesh Nandwani',
         role: 'Senior Broker',
         avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
       });
+    } else {
+      existingMahesh.password = maheshPassword;
+      existingMahesh.name = 'Mahesh Nandwani';
+      existingMahesh.username = 'mahesh';
     }
     await writeTable('users', currentUsers);
   }
@@ -473,7 +480,7 @@ const runDailyNotificationCheck = async () => {
 
     // 3. Build stylized HTML content for email digest
     let htmlContent = `
-      <p>Dear Jimit,</p>
+      <p>Dear Mahesh,</p>
       <p>Here is your daily TrustAssure CRM automated notification summary for today, <strong>${today.toDateString()}</strong>:</p>
     `;
 
@@ -529,7 +536,7 @@ const runDailyNotificationCheck = async () => {
     }
 
     const subject = `TrustAssure CRM - Daily Dashboard Alerts (${todayStr})`;
-    const success = await sendMailNotification("jimitkaklotar786@gmail.com", subject, "Daily CRM Alerts Summary", htmlContent);
+    const success = await sendMailNotification("maheshnandwani13@gmail.com", subject, "Daily CRM Alerts Summary", htmlContent);
     
     if (success) {
       await metadataCol.updateOne(

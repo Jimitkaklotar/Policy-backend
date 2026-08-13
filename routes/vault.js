@@ -50,39 +50,85 @@ router.get('/', authMiddleware, async (req, res) => {
   }
 });
 
-// POST /api/vault
-router.post('/', authMiddleware, upload.fields([{ name: 'aadhaar', maxCount: 1 }, { name: 'pan', maxCount: 1 }]), async (req, res) => {
-  const { customerName } = req.body;
+// POST /api/vault (Supports dynamic multi-file batch uploads with custom labels)
+router.post('/', authMiddleware, upload.any(), async (req, res) => {
+  const { customerName, isFolder, documentFor, documenter } = req.body;
   if (!customerName) {
-    // Cleanup any uploaded files if validation fails
     if (req.files) {
-      if (req.files.aadhaar) { try { fs.unlinkSync(req.files.aadhaar[0].path); } catch (e) {} }
-      if (req.files.pan) { try { fs.unlinkSync(req.files.pan[0].path); } catch (e) {} }
+      req.files.forEach(f => {
+        try { fs.unlinkSync(f.path); } catch (e) {}
+      });
     }
     return res.status(400).json({ message: 'Customer Name is required' });
   }
 
   try {
     const db = getDb();
-    const aadhaarFile = req.files && req.files.aadhaar ? req.files.aadhaar[0] : null;
-    const panFile = req.files && req.files.pan ? req.files.pan[0] : null;
+    
+    if (isFolder === 'true') {
+      const newFolder = {
+        id: 'vlt-' + uuidv4(),
+        customerName,
+        isFolder: true,
+        createdAt: new Date().toISOString()
+      };
+      await db.collection('vault').insertOne(newFolder);
+      return res.status(201).json(newFolder);
+    }
 
-    const newVaultItem = {
-      id: 'vlt-' + uuidv4(),
-      customerName,
-      aadhaarName: aadhaarFile ? aadhaarFile.originalname : '',
-      aadhaarPath: aadhaarFile ? `uploads/${aadhaarFile.filename}` : '',
-      aadhaarSize: aadhaarFile ? formatBytes(aadhaarFile.size) : '',
-      panName: panFile ? panFile.originalname : '',
-      panPath: panFile ? `uploads/${panFile.filename}` : '',
-      panSize: panFile ? formatBytes(panFile.size) : '',
-      createdAt: new Date().toISOString()
-    };
+    // Dynamic file upload batch
+    const metadata = JSON.parse(req.body.metadata || '[]');
+    const files = req.files || [];
+    const insertedItems = [];
 
-    await db.collection('vault').insertOne(newVaultItem);
-    res.status(201).json(newVaultItem);
+    for (let i = 0; i < metadata.length; i++) {
+      const meta = metadata[i];
+      const file = files.find(f => f.fieldname === `file-${meta.fileIndex}`);
+      
+      if (file) {
+        const newVaultItem = {
+          id: 'vlt-' + uuidv4(),
+          customerName,
+          docType: meta.label || 'Other Document',
+          documentFor: documentFor || customerName,
+          documenter: documenter || 'Unknown',
+          fileName: file.originalname,
+          filePath: `uploads/${file.filename}`,
+          fileSize: formatBytes(file.size),
+          isFolder: false,
+          createdAt: new Date().toISOString()
+        };
+        await db.collection('vault').insertOne(newVaultItem);
+        insertedItems.push(newVaultItem);
+      }
+    }
+
+    res.status(201).json({ message: 'Batch uploaded successfully', items: insertedItems });
   } catch (error) {
+    if (req.files) {
+      req.files.forEach(f => {
+        try { fs.unlinkSync(f.path); } catch (e) {}
+      });
+    }
     res.status(500).json({ message: 'Error saving to vault', error: error.message });
+  }
+});
+
+// GET /api/vault/download/:id
+router.get('/download/:id', async (req, res) => {
+  try {
+    const db = getDb();
+    const item = await db.collection('vault').findOne({ id: req.params.id });
+    if (!item || !item.filePath) {
+      return res.status(404).json({ message: 'File not found' });
+    }
+    const fullPath = path.join(__dirname, '../', item.filePath);
+    if (!fs.existsSync(fullPath)) {
+      return res.status(404).json({ message: 'Physical file not found' });
+    }
+    res.download(fullPath, item.fileName);
+  } catch (error) {
+    res.status(500).json({ message: 'Error downloading file', error: error.message });
   }
 });
 
@@ -95,16 +141,9 @@ router.delete('/:id', authMiddleware, async (req, res) => {
       return res.status(404).json({ message: 'Vault document not found' });
     }
 
-    // Delete physical files
-    if (item.aadhaarPath) {
-      const fullPath = path.join(__dirname, '..', item.aadhaarPath);
-      if (fs.existsSync(fullPath)) {
-        try { fs.unlinkSync(fullPath); } catch (e) {}
-      }
-    }
-
-    if (item.panPath) {
-      const fullPath = path.join(__dirname, '..', item.panPath);
+    // Delete physical file
+    if (item.filePath) {
+      const fullPath = path.join(__dirname, '../', item.filePath);
       if (fs.existsSync(fullPath)) {
         try { fs.unlinkSync(fullPath); } catch (e) {}
       }

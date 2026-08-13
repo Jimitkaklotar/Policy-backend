@@ -2,6 +2,7 @@ const express = require('express');
 const cors = require('cors');
 const path = require('path');
 const { connectDB } = require('./db');
+const { sendTestEmail } = require('./utils/mailer');
 
 const authRoutes = require('./routes/auth');
 const dashboardRoutes = require('./routes/dashboard');
@@ -45,6 +46,16 @@ app.use('/api/clients', clientRoutes);
 app.use('/api/policies', policyRoutes);
 app.use('/api/tasks', taskRoutes);
 app.use('/api/vault', vaultRoutes);
+
+// Test email endpoint — call GET /api/test-email to verify SMTP is working
+app.get('/api/test-email', async (req, res) => {
+  const success = await sendTestEmail();
+  if (success) {
+    res.json({ ok: true, message: 'Test email sent successfully! Check maheshnandwani13@gmail.com.' });
+  } else {
+    res.status(500).json({ ok: false, message: 'Failed to send test email. Check server logs for details.' });
+  }
+});
 
 // Root endpoint welcome landing page
 app.get('/', (req, res) => {

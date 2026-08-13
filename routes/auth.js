@@ -15,7 +15,13 @@ router.post('/login', async (req, res) => {
 
   try {
     const db = getDb();
-    const user = await db.collection('users').findOne({ email: { $regex: new RegExp(`^${email}$`, 'i') } });
+    const cleanInput = email.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const user = await db.collection('users').findOne({
+      $or: [
+        { email: { $regex: new RegExp(`^${cleanInput}$`, 'i') } },
+        { username: { $regex: new RegExp(`^${cleanInput}$`, 'i') } }
+      ]
+    });
     
     if (!user) {
       return res.status(401).json({ message: 'Invalid email or password' });

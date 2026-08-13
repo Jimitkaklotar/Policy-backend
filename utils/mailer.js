@@ -1,8 +1,11 @@
 const nodemailer = require('nodemailer');
 
-const SENDER_EMAIL = 'infotchwebbytouch@gmail.com';
-const SENDER_PASS = 'ljsydlumpmlsnrdo';
-const AUTHOR_EMAIL = 'jimitkaklotar786@gmail.com';
+const SENDER_EMAIL = 'maheshnandwani13@gmail.com';
+// 🔑 NOTE: Gmail requires an App Password (not your regular password).
+// Generate one at: https://myaccount.google.com/apppasswords
+// Steps: Google Account → Security → 2-Step Verification → App passwords
+const SENDER_PASS = 'Preet@13';
+const AUTHOR_EMAIL = 'maheshnandwani13@gmail.com';
 
 // Configure SMTP transporter
 const transporter = nodemailer.createTransport({
@@ -13,6 +16,20 @@ const transporter = nodemailer.createTransport({
   auth: {
     user: SENDER_EMAIL,
     pass: SENDER_PASS
+  },
+  tls: {
+    rejectUnauthorized: false
+  }
+});
+
+// Verify SMTP connection on startup
+transporter.verify((error, success) => {
+  if (error) {
+    console.error('[Mailer] ❌ SMTP connection failed:', error.message);
+    console.error('[Mailer] ⚠️  Emails will NOT be sent. Please update the App Password in utils/mailer.js');
+    console.error('[Mailer] 👉 Go to: https://myaccount.google.com/apppasswords to generate a new one.');
+  } else {
+    console.log('[Mailer] ✅ SMTP connection verified. Email notifications are active.');
   }
 });
 
@@ -118,14 +135,31 @@ const sendMailNotification = async (toEmail, subject, title, contentHtml) => {
       subject: subject,
       html: html
     });
-    console.log(`[Mailer] Notification email sent successfully: ${info.messageId}`);
+    console.log(`[Mailer] ✅ Email sent successfully to: ${recipients.join(', ')} | ID: ${info.messageId}`);
     return true;
   } catch (error) {
-    console.error('[Mailer] Failed to send notification email:', error);
+    console.error('[Mailer] ❌ Failed to send email:', error.message);
     return false;
   }
 };
 
+/**
+ * Quick test: sends a plain test email to the author email.
+ */
+const sendTestEmail = async () => {
+  return sendMailNotification(
+    AUTHOR_EMAIL,
+    'TrustAssure - Email Test ✅',
+    'Email System Test',
+    `<p>This is a <strong>test email</strong> from the TrustAssure CRM system.</p>
+     <p>If you received this, your email notifications are working correctly! ✅</p>
+     <p style="color:#64748b;font-size:13px;">Sent at: ${new Date().toLocaleString('en-IN', { timeZone: 'Asia/Kolkata' })} IST</p>`
+  );
+};
+
 module.exports = {
-  sendMailNotification
+  sendMailNotification,
+  sendTestEmail,
+  SENDER_EMAIL,
+  AUTHOR_EMAIL
 };
