@@ -125,7 +125,92 @@ router.get('/summary', authMiddleware, async (req, res) => {
       await db.collection('generatedAlerts').insertMany(newAlertDocs);
     }
 
-    // 4. Recent Activities (limit to 10)
+    // 4. Sales & Premium Analytics by Year, Month, and Policy Type
+    const monthNames = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const yearlyMap = {};
+    const yearsSet = new Set();
+    const typesSet = new Set();
+    const currentYear = today.getFullYear();
+    yearsSet.add(currentYear);
+    yearsSet.add(currentYear - 1);
+
+    policies.forEach(p => {
+      let pDate = null;
+      if (p.issueDate) {
+        pDate = new Date(p.issueDate);
+      } else if (p.createdAt) {
+        pDate = new Date(p.createdAt);
+      }
+      
+      if (!pDate || isNaN(pDate.getTime())) {
+        pDate = new Date();
+      }
+
+      const pYear = pDate.getFullYear();
+      const pMonth = pDate.getMonth(); // 0 - 11
+      const premium = Number(p.premiumAmount || 0);
+      const pType = p.type || 'General';
+
+      yearsSet.add(pYear);
+      typesSet.add(pType);
+
+      if (!yearlyMap[pYear]) {
+        yearlyMap[pYear] = {
+          year: pYear,
+          totalRevenue: 0,
+          totalPolicies: 0,
+          monthly: Array.from({ length: 12 }, (_, i) => ({
+            month: monthNames[i],
+            monthIndex: i,
+            revenue: 0,
+            policies: 0,
+            byType: {}
+          })),
+          byType: {}
+        };
+      }
+
+      yearlyMap[pYear].totalRevenue += premium;
+      yearlyMap[pYear].totalPolicies += 1;
+
+      yearlyMap[pYear].monthly[pMonth].revenue += premium;
+      yearlyMap[pYear].monthly[pMonth].policies += 1;
+
+      if (!yearlyMap[pYear].byType[pType]) {
+        yearlyMap[pYear].byType[pType] = { revenue: 0, count: 0 };
+      }
+      yearlyMap[pYear].byType[pType].revenue += premium;
+      yearlyMap[pYear].byType[pType].count += 1;
+
+      if (!yearlyMap[pYear].monthly[pMonth].byType[pType]) {
+        yearlyMap[pYear].monthly[pMonth].byType[pType] = { revenue: 0, count: 0 };
+      }
+      yearlyMap[pYear].monthly[pMonth].byType[pType].revenue += premium;
+      yearlyMap[pYear].monthly[pMonth].byType[pType].count += 1;
+    });
+
+    yearsSet.forEach(yr => {
+      if (!yearlyMap[yr]) {
+        yearlyMap[yr] = {
+          year: yr,
+          totalRevenue: 0,
+          totalPolicies: 0,
+          monthly: Array.from({ length: 12 }, (_, i) => ({
+            month: monthNames[i],
+            monthIndex: i,
+            revenue: 0,
+            policies: 0,
+            byType: {}
+          })),
+          byType: {}
+        };
+      }
+    });
+
+    const availableYears = Array.from(yearsSet).sort((a, b) => b - a);
+    const availableTypes = ['All', ...Array.from(typesSet)];
+
+    // 5. Recent Activities (limit to 10)
     const recentActivities = activities.slice(0, 10);
 
     res.json({
@@ -133,6 +218,11 @@ router.get('/summary', authMiddleware, async (req, res) => {
         totalClients,
         activePolicies,
         renewalsDue: renewalsDueCount
+      },
+      salesAnalytics: {
+        availableYears,
+        availableTypes,
+        yearlyMap
       },
       birthdaysToday: birthdayClients,
       expiringPolicies: expiryAlerts,
