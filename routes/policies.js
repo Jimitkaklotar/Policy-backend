@@ -90,11 +90,11 @@ router.get('/', authMiddleware, async (req, res) => {
     const clients = await db.collection('clients').find({}).toArray();
     const policiesWithDocs = policies.map(p => {
       const scheduleDoc = documents.find(d => d.policyId === p.id && d.documentType === 'Policy Schedule');
-      const client = clients.find(c => c.id === p.clientId);
+      const client = p.clientId ? clients.find(c => c.id === p.clientId) : null;
       return {
         ...p,
-        clientEmail: client ? client.email : '',
-        clientPhone: client ? client.phone : '',
+        clientEmail: client ? client.email : (p.clientEmail || ''),
+        clientPhone: client ? client.phone : (p.clientPhone || ''),
         scheduleDocument: scheduleDoc || null
       };
     });
@@ -115,14 +115,24 @@ router.get('/:id', authMiddleware, async (req, res) => {
     }
 
     // Fetch client details
-    const client = await db.collection('clients').findOne({ id: policy.clientId });
+    let client = null;
+    if (policy.clientId) {
+      client = await db.collection('clients').findOne({ id: policy.clientId });
+    }
 
     // Fetch related documents
     const policyDocs = await db.collection('documents').find({ policyId: policy.id }).toArray();
 
     res.json({
       ...policy,
-      clientDetails: client || null,
+      clientDetails: client || (policy.clientName ? {
+        id: policy.clientId || '',
+        name: policy.clientName,
+        email: policy.clientEmail || '',
+        phone: policy.clientPhone || '',
+        dob: policy.dob || '',
+        avatar: ''
+      } : null),
       documents: policyDocs
     });
   } catch (error) {
@@ -132,30 +142,51 @@ router.get('/:id', authMiddleware, async (req, res) => {
 
 // POST /api/policies
 router.post('/', authMiddleware, upload.single('file'), async (req, res) => {
-  const { clientId, type, premiumAmount, sumAssured, expiryDate, status, description, company, dob, subType, issueDate, vehicleNumber, code } = req.body;
+  const { 
+    clientId, 
+    clientName, 
+    clientEmail, 
+    clientPhone, 
+    type, 
+    premiumAmount, 
+    sumAssured, 
+    expiryDate, 
+    status, 
+    description, 
+    company, 
+    dob, 
+    subType, 
+    issueDate, 
+    vehicleNumber, 
+    code 
+  } = req.body;
   
-  if (!clientId || !type) {
+  if (!type) {
     if (req.file) {
       try { fs.unlinkSync(req.file.path); } catch (e) {}
     }
-    return res.status(400).json({ message: 'Required fields: clientId, type' });
+    return res.status(400).json({ message: 'Required field: type' });
   }
 
   try {
     const db = getDb();
-    const client = await db.collection('clients').findOne({ id: clientId });
-    if (!client) {
-      if (req.file) {
-        try { fs.unlinkSync(req.file.path); } catch (e) {}
-      }
-      return res.status(404).json({ message: 'Client not found' });
+    let client = null;
+    if (clientId) {
+      client = await db.collection('clients').findOne({ id: clientId });
     }
+
+    const resolvedClientName = (client ? client.name : clientName) || 'General Policy Holder';
+    const resolvedClientEmail = (client ? client.email : clientEmail) || '';
+    const resolvedClientPhone = (client ? client.phone : clientPhone) || '';
+    const resolvedDob = dob || (client ? client.dob : '') || '';
 
     const newPolicy = {
       id: 'pol-' + Math.floor(100000 + Math.random() * 900000),
       policyNumber: 'POL-' + Math.floor(100000000 + Math.random() * 900000000),
-      clientName: client.name,
-      clientId: client.id,
+      clientName: resolvedClientName,
+      clientId: client ? client.id : (clientId || ''),
+      clientEmail: resolvedClientEmail,
+      clientPhone: resolvedClientPhone,
       type,
       subType: subType || '',
       company: company || '',
@@ -163,7 +194,7 @@ router.post('/', authMiddleware, upload.single('file'), async (req, res) => {
       sumAssured: Number(sumAssured || 0),
       issueDate: issueDate || '',
       expiryDate: expiryDate || '',
-      dob: dob || '',
+      dob: resolvedDob,
       status: status || 'Active',
       description: description || '',
       vehicleNumber: vehicleNumber || '',
@@ -188,7 +219,7 @@ router.post('/', authMiddleware, upload.single('file'), async (req, res) => {
       const newDoc = {
         id: 'doc-' + uuidv4(),
         policyId: newPolicy.id,
-        clientId: newPolicy.clientId,
+        clientId: newPolicy.clientId || '',
         documentName: 'Policy Schedule PDF',
         documentType: 'Policy Schedule',
         filePath: `uploads/${req.file.filename}`,
@@ -198,8 +229,8 @@ router.post('/', authMiddleware, upload.single('file'), async (req, res) => {
       await db.collection('documents').insertOne(newDoc);
     }
 
-    // Update client's active policy count
-    if (newPolicy.status === 'Active') {
+    // Update client's active policy count if linked to an existing client
+    if (client && newPolicy.status === 'Active') {
       await db.collection('clients').updateOne(
         { id: client.id },
         { $inc: { activePoliciesCount: 1 } }
@@ -209,7 +240,7 @@ router.post('/', authMiddleware, upload.single('file'), async (req, res) => {
     // Log activity
     const activity = {
       id: 'act-' + uuidv4(),
-      logText: `New ${type} Policy Issued for ${client.name} (Policy: ${newPolicy.policyNumber})${req.file ? ' with PDF schedule' : ''}`,
+      logText: `New ${type} Policy Issued for ${newPolicy.clientName} (Policy: ${newPolicy.policyNumber})${req.file ? ' with PDF schedule' : ''}`,
       timestamp: new Date().toISOString(),
       type: 'success'
     };
@@ -222,42 +253,44 @@ router.post('/', authMiddleware, upload.single('file'), async (req, res) => {
       await db.collection('activities').deleteMany({ id: { $in: toDeleteIds } });
     }
 
-    // Send email notification to client and author
-    const mailContent = `
-      <p>Dear jimt & Client,</p>
-      <p>A new insurance policy has been issued successfully on the TrustAssure Broker CRM.</p>
-      <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
-        <tr>
-          <td style="padding: 8px 0; font-weight: bold; width: 120px; border-bottom: 1px solid #f1f5f9;">Policy Number:</td>
-          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newPolicy.policyNumber}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Client Name:</td>
-          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newPolicy.clientName}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Insurance Type:</td>
-          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newPolicy.type}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Premium Amount:</td>
-          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">₹${newPolicy.premiumAmount.toLocaleString()}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Sum Assured:</td>
-          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">₹${newPolicy.sumAssured.toLocaleString()}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Expiry Date:</td>
-          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newPolicy.expiryDate}</td>
-        </tr>
-        <tr>
-          <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Status:</td>
-          <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9; color: #10B981; font-weight: 500;">${newPolicy.status}</td>
-        </tr>
-      </table>
-    `;
-    sendMailNotification(client.email, `Policy Issued: ${newPolicy.policyNumber}`, 'Insurance Policy Issued Confirmation', mailContent);
+    // Send email notification if client email exists
+    if (resolvedClientEmail) {
+      const mailContent = `
+        <p>Dear Valued Client,</p>
+        <p>A new insurance policy has been issued successfully on the TrustAssure Broker CRM.</p>
+        <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
+          <tr>
+            <td style="padding: 8px 0; font-weight: bold; width: 120px; border-bottom: 1px solid #f1f5f9;">Policy Number:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newPolicy.policyNumber}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Client Name:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newPolicy.clientName}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Insurance Type:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newPolicy.type}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Premium Amount:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">₹${newPolicy.premiumAmount.toLocaleString()}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Sum Assured:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">₹${newPolicy.sumAssured.toLocaleString()}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Expiry Date:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${newPolicy.expiryDate || 'N/A'}</td>
+          </tr>
+          <tr>
+            <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Status:</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9; color: #10B981; font-weight: 500;">${newPolicy.status}</td>
+          </tr>
+        </table>
+      `;
+      sendMailNotification(resolvedClientEmail, `Policy Issued: ${newPolicy.policyNumber}`, 'Insurance Policy Issued Confirmation', mailContent);
+    }
 
     res.status(201).json(newPolicy);
   } catch (error) {
@@ -274,9 +307,29 @@ router.put('/:id', authMiddleware, async (req, res) => {
       return res.status(404).json({ message: 'Policy not found' });
     }
 
-    const { type, premiumAmount, sumAssured, expiryDate, status, description, kycVerified, company, dob, issueDate, vehicleNumber, code } = req.body;
+    const { 
+      type, 
+      subType,
+      premiumAmount, 
+      sumAssured, 
+      expiryDate, 
+      status, 
+      description, 
+      kycVerified, 
+      company, 
+      dob, 
+      issueDate, 
+      vehicleNumber, 
+      code,
+      clientName,
+      clientEmail,
+      clientPhone,
+      clientId
+    } = req.body;
+
     const updatedFields = {};
     if (type !== undefined) updatedFields.type = type;
+    if (subType !== undefined) updatedFields.subType = subType;
     if (premiumAmount !== undefined) updatedFields.premiumAmount = Number(premiumAmount);
     if (sumAssured !== undefined) updatedFields.sumAssured = Number(sumAssured);
     if (expiryDate !== undefined) updatedFields.expiryDate = expiryDate;
@@ -288,12 +341,16 @@ router.put('/:id', authMiddleware, async (req, res) => {
     if (issueDate !== undefined) updatedFields.issueDate = issueDate;
     if (vehicleNumber !== undefined) updatedFields.vehicleNumber = vehicleNumber;
     if (code !== undefined) updatedFields.code = code;
+    if (clientName !== undefined) updatedFields.clientName = clientName;
+    if (clientEmail !== undefined) updatedFields.clientEmail = clientEmail;
+    if (clientPhone !== undefined) updatedFields.clientPhone = clientPhone;
+    if (clientId !== undefined) updatedFields.clientId = clientId;
 
     await db.collection('policies').updateOne({ id: req.params.id }, { $set: updatedFields });
     const updatedPolicy = { ...oldPolicy, ...updatedFields };
 
-    // Adjust client active policies count if status changed
-    if (status && oldPolicy.status !== status) {
+    // Adjust client active policies count if status changed and linked to client
+    if (status && oldPolicy.status !== status && oldPolicy.clientId) {
       if (status === 'Active' && oldPolicy.status !== 'Active') {
         await db.collection('clients').updateOne({ id: oldPolicy.clientId }, { $inc: { activePoliciesCount: 1 } });
       } else if (status !== 'Active' && oldPolicy.status === 'Active') {
@@ -310,11 +367,11 @@ router.put('/:id', authMiddleware, async (req, res) => {
     };
     await db.collection('activities').insertOne(activity);
 
-    // Send email notification to client and author
-    const client = await db.collection('clients').findOne({ id: updatedPolicy.clientId });
-    if (client) {
+    // Send email notification to client if email exists
+    const targetEmail = updatedPolicy.clientEmail || (updatedPolicy.clientId ? (await db.collection('clients').findOne({ id: updatedPolicy.clientId }))?.email : '');
+    if (targetEmail) {
       const mailContent = `
-        <p>Dear jimt & Client,</p>
+        <p>Dear Valued Client,</p>
         <p>Your TrustAssure insurance policy details have been updated successfully.</p>
         <table style="width: 100%; border-collapse: collapse; margin-top: 15px;">
           <tr>
@@ -331,7 +388,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
           </tr>
           <tr>
             <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Expiry Date:</td>
-            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${updatedPolicy.expiryDate}</td>
+            <td style="padding: 8px 0; border-bottom: 1px solid #f1f5f9;">${updatedPolicy.expiryDate || 'N/A'}</td>
           </tr>
           <tr>
             <td style="padding: 8px 0; font-weight: bold; border-bottom: 1px solid #f1f5f9;">Status:</td>
@@ -339,7 +396,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
           </tr>
         </table>
       `;
-      sendMailNotification(client.email, `Policy Updated: ${updatedPolicy.policyNumber}`, 'Insurance Policy Details Updated', mailContent);
+      sendMailNotification(targetEmail, `Policy Updated: ${updatedPolicy.policyNumber}`, 'Insurance Policy Details Updated', mailContent);
     }
 
     delete updatedPolicy._id;
@@ -360,8 +417,8 @@ router.delete('/:id', authMiddleware, async (req, res) => {
 
     await db.collection('policies').deleteOne({ id: req.params.id });
 
-    // Decrement client active policies count
-    if (policyToDelete.status === 'Active') {
+    // Decrement client active policies count if clientId exists
+    if (policyToDelete.clientId && policyToDelete.status === 'Active') {
       await db.collection('clients').updateOne(
         { id: policyToDelete.clientId },
         { $inc: { activePoliciesCount: -1 } }
