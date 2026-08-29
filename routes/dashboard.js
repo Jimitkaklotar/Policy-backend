@@ -210,7 +210,32 @@ router.get('/summary', authMiddleware, async (req, res) => {
     const availableYears = Array.from(yearsSet).sort((a, b) => b - a);
     const availableTypes = ['All', ...Array.from(typesSet)];
 
-    // 5. Recent Activities (limit to 10)
+    // 5. Normalized policy records for granular multi-period comparisons
+    const policyRecords = policies.map(p => {
+      let dateStr = '';
+      if (p.issueDate) {
+        dateStr = String(p.issueDate).split('T')[0];
+      } else if (p.createdAt) {
+        dateStr = String(p.createdAt).split('T')[0];
+      } else {
+        dateStr = today.toISOString().split('T')[0];
+      }
+
+      return {
+        id: p.id,
+        policyNumber: p.policyNumber || '',
+        clientName: p.clientName || 'General Policy Holder',
+        type: p.type || 'General',
+        subType: p.subType || '',
+        company: p.company || '',
+        date: dateStr,
+        createdAt: p.createdAt || p.issueDate || '',
+        premiumAmount: Number(p.premiumAmount || 0),
+        status: p.status || 'Active'
+      };
+    });
+
+    // 6. Recent Activities (limit to 10)
     const recentActivities = activities.slice(0, 10);
 
     res.json({
@@ -222,7 +247,8 @@ router.get('/summary', authMiddleware, async (req, res) => {
       salesAnalytics: {
         availableYears,
         availableTypes,
-        yearlyMap
+        yearlyMap,
+        policyRecords
       },
       birthdaysToday: birthdayClients,
       expiringPolicies: expiryAlerts,

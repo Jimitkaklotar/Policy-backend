@@ -38,7 +38,7 @@ router.get('/', authMiddleware, async (req, res) => {
       filter.status = { $regex: new RegExp(`^${status}$`, 'i') };
     }
 
-    let policies = await db.collection('policies').find(filter).toArray();
+    let policies = await db.collection('policies').find(filter).sort({ createdAt: -1, _id: -1 }).toArray();
 
     if (query) {
       const q = query.toLowerCase();
@@ -82,8 +82,15 @@ router.get('/', authMiddleware, async (req, res) => {
       });
     }
 
-    // Sort by created date or number
-    policies.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    // Sort by latest entry first (createdAt descending, fallback to issueDate / _id / id)
+    policies.sort((a, b) => {
+      const timeA = (a.createdAt ? new Date(a.createdAt).getTime() : 0) || (a.issueDate ? new Date(a.issueDate).getTime() : 0) || 0;
+      const timeB = (b.createdAt ? new Date(b.createdAt).getTime() : 0) || (b.issueDate ? new Date(b.issueDate).getTime() : 0) || 0;
+      if (timeB !== timeA) {
+        return timeB - timeA;
+      }
+      return String(b.id || '').localeCompare(String(a.id || ''));
+    });
 
     // Attach client details and policy schedule document if it exists
     const documents = await db.collection('documents').find({}).toArray();

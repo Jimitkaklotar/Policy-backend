@@ -42,8 +42,12 @@ router.get('/', authMiddleware, async (req, res) => {
       filter.customerName = { $regex: query.toLowerCase(), $options: 'i' };
     }
 
-    const items = await db.collection('vault').find(filter).toArray();
-    items.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const items = await db.collection('vault').find(filter).sort({ createdAt: -1, _id: -1 }).toArray();
+    items.sort((a, b) => {
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      return timeB - timeA;
+    });
     res.json(items);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching vault data', error: error.message });
