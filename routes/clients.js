@@ -45,8 +45,15 @@ router.get('/', authMiddleware, async (req, res) => {
       ];
     }
 
-    const clients = await db.collection('clients').find(filter).toArray();
-    clients.sort((a, b) => a.name.localeCompare(b.name));
+    const clients = await db.collection('clients').find(filter).sort({ createdAt: -1, _id: -1 }).toArray();
+    clients.sort((a, b) => {
+      const timeA = (a.createdAt ? new Date(a.createdAt).getTime() : 0) || 0;
+      const timeB = (b.createdAt ? new Date(b.createdAt).getTime() : 0) || 0;
+      if (timeB !== timeA) {
+        return timeB - timeA;
+      }
+      return String(b.id || '').localeCompare(String(a.id || ''));
+    });
 
     // Fetch documents and attach
     const documents = await db.collection('documents').find({}).toArray();
