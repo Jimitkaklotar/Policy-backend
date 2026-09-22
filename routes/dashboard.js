@@ -33,17 +33,49 @@ router.get('/summary', authMiddleware, async (req, res) => {
       return true;
     };
 
+    const parseDateToMidnight = (dateStr) => {
+      if (!dateStr) return null;
+      if (typeof dateStr === 'string') {
+        if (dateStr.includes('/')) {
+          const parts = dateStr.split('/');
+          if (parts.length === 3) {
+            const d = parseInt(parts[0], 10);
+            const m = parseInt(parts[1], 10) - 1;
+            const y = parseInt(parts[2], 10);
+            return new Date(y, m, d, 0, 0, 0, 0);
+          }
+        } else if (dateStr.includes('-')) {
+          const clean = dateStr.split('T')[0];
+          const parts = clean.split('-');
+          if (parts.length === 3) {
+            const y = parseInt(parts[0], 10);
+            const m = parseInt(parts[1], 10) - 1;
+            const d = parseInt(parts[2], 10);
+            return new Date(y, m, d, 0, 0, 0, 0);
+          }
+        }
+      }
+      const dt = new Date(dateStr);
+      if (isNaN(dt.getTime())) return null;
+      dt.setHours(0, 0, 0, 0);
+      return dt;
+    };
+
     // 1. Stats Cards
     const totalClients = clients.length;
     const activePolicies = policies.filter(p => p.status === 'Active').length;
 
-    // Renewals due in the next 30 days (excluding Life insurance & dismissed alerts, based on 15, 7, 1 day ratio)
+    // Renewals due (milestones: 15, 7, and 1 day before expiry, excluding Life & dismissed)
     const renewalsDuePolicies = policies.filter(p => {
       if (p.type === 'Life') return false;
       if (p.status !== 'Active') return false;
-      const expiry = new Date(p.expiryDate);
-      const diffTime = expiry - today;
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      if (!p.expiryDate) return false;
+
+      const expiryDateObj = parseDateToMidnight(p.expiryDate);
+      if (!expiryDateObj) return false;
+
+      const diffTime = expiryDateObj.getTime() - today.getTime();
+      const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
       
       if (![15, 7, 1].includes(diffDays)) return false;
 
@@ -52,56 +84,131 @@ router.get('/summary', authMiddleware, async (req, res) => {
     });
     const renewalsDueCount = renewalsDuePolicies.length;
 
-    // 2. Birthday Reminders (matching MM-DD & not dismissed for current year)
-    const todayMMDD = today.toISOString().slice(5, 10); // "MM-DD"
-    const birthdayClients = clients.filter(c => {
-      if (!c.dob) return false;
-      const dobMMDD = c.dob.slice(5, 10);
-      if (dobMMDD !== todayMMDD) return false;
+    const getDaysUntilBirthday = (dobStr) => {
+      if (!dobStr) return null;
+      let birthMonth = -1;
+      let birthDay = -1;
 
-      const alertId = `b-${c.id}-${today.getFullYear()}`;
-      return shouldShowAlert(alertId);
-    }).map(c => {
-      const msg = `Happy Birthday ${c.name}! Wishing you a wonderful year ahead filled with happiness and success, from the team at TrustAssure. 🎂🎉`;
-      const cleanPhone = c.phone.replace(/[^0-9]/g, '');
+      if (typeof dobStr === 'string') {
+        if (dobStr.includes('/')) {
+          const parts = dobStr.split('/');
+          if (parts.length >= 2) {
+            birthDay = parseInt(parts[0], 10);
+            birthMonth = parseInt(parts[1], 10) - 1;
+          }
+        } else if (dobStr.includes('-')) {
+          const clean = dobStr.split('T')[0];
+          const parts = clean.split('-');
+          if (parts.length === 3) {
+            birthMonth = parseInt(parts[1], 10) - 1;
+            birthDay = parseInt(parts[2], 10);
+          } else if (parts.length === 2) {
+            birthMonth = parseInt(parts[0], 10) - 1;
+            birthDay = parseInt(parts[1], 10);
+          }
+        }
+      }
+
+      if (birthMonth < 0 || birthDay < 0 || isNaN(birthMonth) || isNaN(birthDay)) {
+        const d = new Date(dobStr);
+        if (isNaN(d.getTime())) return null;
+        birthMonth = d.getMonth();
+        birthDay = d.getDate();
+      }
+
+      const currentYear = today.getFullYear();
+      let nextBirthday = new Date(currentYear, birthMonth, birthDay, 0, 0, 0, 0);
+
+      if (nextBirthday < today) {
+        nextBirthday = new Date(currentYear + 1, birthMonth, birthDay, 0, 0, 0, 0);
+      }
+
+      const diffTime = nextBirthday.getTime() - today.getTime();
+      const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
+
+      return { diffDays, nextBirthdayYear: nextBirthday.getFullYear() };
+    };
+
+    // 2. Birthday Reminders (milestones: 5 days before, 1 day before, and today)
+    const birthdayClients = clients.map(c => {
+      if (!c.dob) return null;
+      const bInfo = getDaysUntilBirthday(c.dob);
+      if (!bInfo) return null;
+      const { diffDays, nextBirthdayYear } = bInfo;
+
+      if (![5, 1, 0].includes(diffDays)) return null;
+
+      const alertId = `b-${c.id}-${nextBirthdayYear}-${diffDays}`;
+      if (!shouldShowAlert(alertId)) return null;
+
+      let msg = '';
+      let label = '';
+      if (diffDays === 0) {
+        label = 'Birthday Today';
+        msg = `Happy Birthday ${c.name}! Wishing you a wonderful day filled with happiness and a fantastic year ahead, from the team at TrustAssure. 🎂🎉`;
+      } else if (diffDays === 1) {
+        label = 'Birthday Tomorrow (1 day left)';
+        msg = `Dear ${c.name}, wishing you an early Happy Birthday for tomorrow! May your year ahead be blessed with joy and good health. Best regards from TrustAssure. 🎂🎈`;
+      } else {
+        label = 'Upcoming Birthday (in 5 days)';
+        msg = `Dear ${c.name}, team TrustAssure wishes you an advanced Happy Birthday! Looking forward to celebrating your special day in 5 days. 🎂✨`;
+      }
+
+      const cleanPhone = (c.phone || '').replace(/[^0-9]/g, '');
       const whatsappUrl = `https://web.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(msg)}`;
       
       return {
-        id: `b-${c.id}-${today.getFullYear()}`,
-        alertId: `b-${c.id}-${today.getFullYear()}`,
+        id: alertId,
+        alertId,
         clientId: c.id,
         name: c.name,
         dob: c.dob,
         phone: c.phone,
         email: c.email || '',
         avatar: c.avatar,
+        daysLeft: diffDays,
+        label,
         whatsappUrl
       };
-    });
+    }).filter(Boolean);
 
-    // 3. Policy Expiry Alerts (exactly 15, 7, 1 days) (excluding Life insurance & dismissed)
+    birthdayClients.sort((a, b) => a.daysLeft - b.daysLeft);
+
+    // 3. Policy Renewal Alerts (milestones: exactly 15 days, 7 days, and 1 day before expiry)
     const expiryAlerts = policies.filter(p => {
       if (p.type === 'Life') return false;
       if (p.status !== 'Active') return false;
-      const expiry = new Date(p.expiryDate);
-      const diffTime = expiry - today;
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      if (!p.expiryDate) return false;
+
+      const expiryDateObj = parseDateToMidnight(p.expiryDate);
+      if (!expiryDateObj) return false;
+
+      const diffTime = expiryDateObj.getTime() - today.getTime();
+      const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
       
       if (![15, 7, 1].includes(diffDays)) return false;
 
       const alertId = `p-${p.id}-${p.expiryDate}-${diffDays}`;
       return shouldShowAlert(alertId);
     }).map(p => {
-      const expiry = new Date(p.expiryDate);
-      const diffTime = expiry - today;
-      const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+      const expiryDateObj = parseDateToMidnight(p.expiryDate);
+      const diffTime = expiryDateObj.getTime() - today.getTime();
+      const diffDays = Math.round(diffTime / (1000 * 60 * 60 * 24));
 
       const client = clients.find(c => c.id === p.clientId);
       const clientPhone = client ? client.phone : '';
       const clientEmail = client ? client.email : '';
       const cleanPhone = clientPhone.replace(/[^0-9]/g, '');
 
-      const msg = `Dear ${p.clientName}, your TrustAssure policy ${p.policyNumber} (${p.type} Insurance) is due for renewal on ${p.expiryDate} (${diffDays} days left). Please reach out to initiate renewal. Thank you!`;
+      let msg = '';
+      if (diffDays === 1) {
+        msg = `URGENT RENEWAL: Dear ${p.clientName}, your TrustAssure policy #${p.policyNumber} (${p.type} Insurance) expires TOMORROW (${p.expiryDate}). Please renew today to prevent break in policy coverage. Thank you!`;
+      } else if (diffDays === 7) {
+        msg = `Dear ${p.clientName}, important reminder: your TrustAssure policy #${p.policyNumber} (${p.type} Insurance) is expiring in 7 days on ${p.expiryDate}. Please reach out promptly to complete renewal. Thank you!`;
+      } else {
+        msg = `Dear ${p.clientName}, friendly reminder: your TrustAssure policy #${p.policyNumber} (${p.type} Insurance) is due for renewal on ${p.expiryDate} (15 days left). Please contact us to initiate renewal. Thank you!`;
+      }
+
       const whatsappUrl = `https://web.whatsapp.com/send?phone=${cleanPhone}&text=${encodeURIComponent(msg)}`;
 
       return {

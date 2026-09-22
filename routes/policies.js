@@ -28,7 +28,7 @@ const upload = multer({
 router.get('/', authMiddleware, async (req, res) => {
   try {
     const db = getDb();
-    const { query, type, status } = req.query;
+    const { query, type, status, issueDate } = req.query;
 
     const filter = {};
     if (type && type !== 'All') {
@@ -38,72 +38,121 @@ router.get('/', authMiddleware, async (req, res) => {
       filter.status = { $regex: new RegExp(`^${status}$`, 'i') };
     }
 
-    let policies = await db.collection('policies').find(filter).sort({ createdAt: -1, _id: -1 }).toArray();
+    let policies = await db.collection('policies').find(filter).toArray();
+    const documents = await db.collection('documents').find({}).toArray();
+    const clients = await db.collection('clients').find({}).toArray();
 
+    // 1. Attach client details and policy schedule document first
+    let policiesWithDocs = policies.map(p => {
+      const scheduleDoc = documents.find(d => d.policyId === p.id && d.documentType === 'Policy Schedule');
+      const client = clients.find(c => 
+        (p.clientId && String(c.id) === String(p.clientId)) ||
+        (c.name && p.clientName && c.name.trim().toLowerCase() === p.clientName.trim().toLowerCase())
+      );
+
+      return {
+        ...p,
+        clientEmail: (client && client.email) || p.clientEmail || '',
+        clientPhone: (client && client.phone) || p.clientPhone || '',
+        scheduleDocument: scheduleDoc || null
+      };
+    });
+
+    // 2. Filter by issueDate if provided
+    if (issueDate) {
+      const targetDate = String(issueDate).trim();
+      policiesWithDocs = policiesWithDocs.filter(p => {
+        if (!p.issueDate) return false;
+        const pDate = String(p.issueDate).split('T')[0].split(' ')[0].trim();
+        return pDate === targetDate;
+      });
+    }
+
+    // 3. Filter by search query if provided
     if (query) {
-      const q = query.toLowerCase();
-      const clients = await db.collection('clients').find({}).toArray();
-      policies = policies.filter(p => {
-        const client = clients.find(c => c.id === p.clientId);
-        
+      const q = String(query).toLowerCase().trim();
+      const cleanDigitsQ = q.replace(/[^0-9]/g, '');
+
+      policiesWithDocs = policiesWithDocs.filter(p => {
         const matchPolicyNumber = p.policyNumber ? p.policyNumber.toLowerCase().includes(q) : false;
         const matchClientName = p.clientName ? p.clientName.toLowerCase().includes(q) : false;
         const matchType = p.type ? p.type.toLowerCase().includes(q) : false;
+        const matchSubType = p.subType ? p.subType.toLowerCase().includes(q) : false;
         const matchStatus = p.status ? p.status.toLowerCase().includes(q) : false;
         const matchDescription = p.description ? p.description.toLowerCase().includes(q) : false;
         const matchExpiry = p.expiryDate ? p.expiryDate.toLowerCase().includes(q) : false;
-        
-        const matchClientEmail = client && client.email ? client.email.toLowerCase().includes(q) : false;
-        const matchClientPhone = client && client.phone ? client.phone.toLowerCase().includes(q) : false;
-        const matchClientId = client && client.id ? client.id.toLowerCase().includes(q) : false;
-        
-        const matchPremium = p.premiumAmount ? p.premiumAmount.toString().toLowerCase().includes(q) : false;
-        const matchSum = p.sumAssured ? p.sumAssured.toString().toLowerCase().includes(q) : false;
+        const matchIssue = p.issueDate ? p.issueDate.toLowerCase().includes(q) : false;
         const matchCompany = p.company ? p.company.toLowerCase().includes(q) : false;
         const matchCode = p.code ? p.code.toLowerCase().includes(q) : false;
         const matchVehicleNumber = p.vehicleNumber ? p.vehicleNumber.toLowerCase().includes(q) : false;
+        const matchClientId = p.clientId ? String(p.clientId).toLowerCase().includes(q) : false;
+        const matchClientEmail = p.clientEmail ? p.clientEmail.toLowerCase().includes(q) : false;
+
+        // Mobile / Phone match (support raw string, formatted, country code prefixes, etc.)
+        const matchPhone = (phoneVal) => {
+          if (!phoneVal) return false;
+          const rawPhone = String(phoneVal).toLowerCase().trim();
+          if (rawPhone.includes(q)) return true;
+          if (cleanDigitsQ.length > 0) {
+            const cleanDigits = rawPhone.replace(/\D/g, '');
+            if (cleanDigits.includes(cleanDigitsQ)) return true;
+            if (cleanDigits.startsWith('91') && cleanDigits.slice(2).includes(cleanDigitsQ)) return true;
+            if (cleanDigits.startsWith('0') && cleanDigits.slice(1).includes(cleanDigitsQ)) return true;
+            if (cleanDigitsQ.startsWith('91') && cleanDigits.includes(cleanDigitsQ.slice(2))) return true;
+            if (cleanDigitsQ.startsWith('0') && cleanDigits.includes(cleanDigitsQ.slice(1))) return true;
+          }
+          return false;
+        };
+
+        const matchClientPhone = matchPhone(p.clientPhone) || matchPhone(p.phone) || matchPhone(p.mobile);
+
+        const matchPremium = p.premiumAmount ? p.premiumAmount.toString().toLowerCase().includes(q) : false;
+        const matchSum = p.sumAssured ? p.sumAssured.toString().toLowerCase().includes(q) : false;
 
         return (
           matchPolicyNumber ||
           matchClientName ||
           matchType ||
+          matchSubType ||
           matchStatus ||
           matchDescription ||
           matchExpiry ||
-          matchClientEmail ||
-          matchClientPhone ||
-          matchClientId ||
-          matchPremium ||
-          matchSum ||
+          matchIssue ||
           matchCompany ||
           matchCode ||
-          matchVehicleNumber
+          matchVehicleNumber ||
+          matchClientId ||
+          matchClientEmail ||
+          matchClientPhone ||
+          matchPremium ||
+          matchSum
         );
       });
     }
 
-    // Sort by latest entry first (createdAt descending, fallback to issueDate / _id / id)
-    policies.sort((a, b) => {
-      const timeA = (a.createdAt ? new Date(a.createdAt).getTime() : 0) || (a.issueDate ? new Date(a.issueDate).getTime() : 0) || 0;
-      const timeB = (b.createdAt ? new Date(b.createdAt).getTime() : 0) || (b.issueDate ? new Date(b.issueDate).getTime() : 0) || 0;
-      if (timeB !== timeA) {
-        return timeB - timeA;
-      }
-      return String(b.id || '').localeCompare(String(a.id || ''));
-    });
-
-    // Attach client details and policy schedule document if it exists
-    const documents = await db.collection('documents').find({}).toArray();
-    const clients = await db.collection('clients').find({}).toArray();
-    const policiesWithDocs = policies.map(p => {
-      const scheduleDoc = documents.find(d => d.policyId === p.id && d.documentType === 'Policy Schedule');
-      const client = p.clientId ? clients.find(c => c.id === p.clientId) : null;
-      return {
-        ...p,
-        clientEmail: client ? client.email : (p.clientEmail || ''),
-        clientPhone: client ? client.phone : (p.clientPhone || ''),
-        scheduleDocument: scheduleDoc || null
+    // 4. Sort by latest issue date first (issueDate descending, fallback to createdAt / _id / id)
+    policiesWithDocs.sort((a, b) => {
+      const getTimestamp = (val) => {
+        if (!val) return 0;
+        const t = new Date(val).getTime();
+        return isNaN(t) ? 0 : t;
       };
+
+      const issueA = getTimestamp(a.issueDate);
+      const issueB = getTimestamp(b.issueDate);
+
+      if (issueB !== issueA) {
+        return issueB - issueA;
+      }
+
+      const createdA = getTimestamp(a.createdAt);
+      const createdB = getTimestamp(b.createdAt);
+
+      if (createdB !== createdA) {
+        return createdB - createdA;
+      }
+
+      return String(b.id || '').localeCompare(String(a.id || ''));
     });
 
     res.json(policiesWithDocs);

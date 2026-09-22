@@ -80,20 +80,37 @@ router.post('/', authMiddleware, upload.any(), async (req, res) => {
       return res.status(201).json(newFolder);
     }
 
-    // Dynamic file upload batch
-    const metadata = JSON.parse(req.body.metadata || '[]');
-    const files = req.files || [];
-    const insertedItems = [];
+    // 1. Single or direct file upload
+    if ((!req.body.metadata || req.body.metadata === '[]') && files.length > 0) {
+      for (const file of files) {
+        const newVaultItem = {
+          id: 'vlt-' + uuidv4(),
+          customerName,
+          docType: req.body.docType || req.body.label || 'Document',
+          documentFor: documentFor || customerName,
+          documenter: documenter || 'User',
+          fileName: file.originalname,
+          filePath: `uploads/${file.filename}`,
+          fileSize: formatBytes(file.size),
+          isFolder: false,
+          createdAt: new Date().toISOString()
+        };
+        await db.collection('vault').insertOne(newVaultItem);
+        insertedItems.push(newVaultItem);
+      }
+      return res.status(201).json({ message: 'Document uploaded successfully', items: insertedItems });
+    }
 
+    // 2. Dynamic file upload batch
     for (let i = 0; i < metadata.length; i++) {
       const meta = metadata[i];
-      const file = files.find(f => f.fieldname === `file-${meta.fileIndex}`);
+      const file = files.find(f => f.fieldname === `file-${meta.fileIndex}` || f.fieldname === 'file');
       
       if (file) {
         const newVaultItem = {
           id: 'vlt-' + uuidv4(),
           customerName,
-          docType: meta.label || 'Other Document',
+          docType: meta.label || req.body.docType || 'Other Document',
           documentFor: documentFor || customerName,
           documenter: documenter || 'Unknown',
           fileName: file.originalname,
@@ -107,7 +124,7 @@ router.post('/', authMiddleware, upload.any(), async (req, res) => {
       }
     }
 
-    res.status(201).json({ message: 'Batch uploaded successfully', items: insertedItems });
+    res.status(201).json({ message: 'Uploaded successfully', items: insertedItems });
   } catch (error) {
     if (req.files) {
       req.files.forEach(f => {
