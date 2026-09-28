@@ -68,6 +68,8 @@ router.post('/', authMiddleware, upload.any(), async (req, res) => {
 
   try {
     const db = getDb();
+    const files = req.files || [];
+    const insertedItems = [];
     
     if (isFolder === 'true') {
       const newFolder = {
@@ -80,8 +82,42 @@ router.post('/', authMiddleware, upload.any(), async (req, res) => {
       return res.status(201).json(newFolder);
     }
 
-    // 1. Single or direct file upload
-    if ((!req.body.metadata || req.body.metadata === '[]') && files.length > 0) {
+    let metadata = [];
+    if (req.body.metadata) {
+      try {
+        metadata = typeof req.body.metadata === 'string' ? JSON.parse(req.body.metadata) : req.body.metadata;
+      } catch (e) {
+        metadata = [];
+      }
+    }
+
+    // 1. Dynamic file upload batch
+    if (Array.isArray(metadata) && metadata.length > 0) {
+      for (let i = 0; i < metadata.length; i++) {
+        const meta = metadata[i];
+        const file = files.find(f => f.fieldname === `file-${meta.fileIndex}` || f.fieldname === 'file' || f.fieldname === `file-${i}`);
+        
+        if (file) {
+          const newVaultItem = {
+            id: 'vlt-' + uuidv4(),
+            customerName,
+            docType: meta.label || req.body.docType || req.body.label || 'Other Document',
+            documentFor: documentFor || customerName,
+            documenter: documenter || 'User',
+            fileName: file.originalname,
+            filePath: `uploads/${file.filename}`,
+            fileSize: formatBytes(file.size),
+            isFolder: false,
+            createdAt: new Date().toISOString()
+          };
+          await db.collection('vault').insertOne(newVaultItem);
+          insertedItems.push(newVaultItem);
+        }
+      }
+    }
+
+    // 2. Single or direct file upload fallback
+    if (insertedItems.length === 0 && files.length > 0) {
       for (const file of files) {
         const newVaultItem = {
           id: 'vlt-' + uuidv4(),
@@ -89,30 +125,6 @@ router.post('/', authMiddleware, upload.any(), async (req, res) => {
           docType: req.body.docType || req.body.label || 'Document',
           documentFor: documentFor || customerName,
           documenter: documenter || 'User',
-          fileName: file.originalname,
-          filePath: `uploads/${file.filename}`,
-          fileSize: formatBytes(file.size),
-          isFolder: false,
-          createdAt: new Date().toISOString()
-        };
-        await db.collection('vault').insertOne(newVaultItem);
-        insertedItems.push(newVaultItem);
-      }
-      return res.status(201).json({ message: 'Document uploaded successfully', items: insertedItems });
-    }
-
-    // 2. Dynamic file upload batch
-    for (let i = 0; i < metadata.length; i++) {
-      const meta = metadata[i];
-      const file = files.find(f => f.fieldname === `file-${meta.fileIndex}` || f.fieldname === 'file');
-      
-      if (file) {
-        const newVaultItem = {
-          id: 'vlt-' + uuidv4(),
-          customerName,
-          docType: meta.label || req.body.docType || 'Other Document',
-          documentFor: documentFor || customerName,
-          documenter: documenter || 'Unknown',
           fileName: file.originalname,
           filePath: `uploads/${file.filename}`,
           fileSize: formatBytes(file.size),
