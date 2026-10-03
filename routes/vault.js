@@ -98,10 +98,11 @@ router.post('/', authMiddleware, upload.any(), async (req, res) => {
         const file = files.find(f => f.fieldname === `file-${meta.fileIndex}` || f.fieldname === 'file' || f.fieldname === `file-${i}`);
         
         if (file) {
+          const defaultName = file.originalname ? file.originalname.replace(/\.[^/.]+$/, "") : 'Document';
           const newVaultItem = {
             id: 'vlt-' + uuidv4(),
             customerName,
-            docType: meta.label || req.body.docType || req.body.label || 'Other Document',
+            docType: meta.label || req.body.docType || req.body.label || defaultName,
             documentFor: documentFor || customerName,
             documenter: documenter || 'User',
             fileName: file.originalname,
@@ -119,10 +120,11 @@ router.post('/', authMiddleware, upload.any(), async (req, res) => {
     // 2. Single or direct file upload fallback
     if (insertedItems.length === 0 && files.length > 0) {
       for (const file of files) {
+        const defaultName = file.originalname ? file.originalname.replace(/\.[^/.]+$/, "") : 'Document';
         const newVaultItem = {
           id: 'vlt-' + uuidv4(),
           customerName,
-          docType: req.body.docType || req.body.label || 'Document',
+          docType: req.body.docType || req.body.label || defaultName,
           documentFor: documentFor || customerName,
           documenter: documenter || 'User',
           fileName: file.originalname,

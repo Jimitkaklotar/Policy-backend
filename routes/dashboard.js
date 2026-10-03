@@ -221,7 +221,8 @@ router.get('/summary', authMiddleware, async (req, res) => {
         type: p.type,
         expiryDate: p.expiryDate,
         daysLeft: diffDays,
-        whatsappUrl
+        whatsappUrl,
+        code: p.code || ''
       };
     });
 
@@ -338,7 +339,12 @@ router.get('/summary', authMiddleware, async (req, res) => {
         date: dateStr,
         createdAt: p.createdAt || p.issueDate || '',
         premiumAmount: Number(p.premiumAmount || 0),
-        status: p.status || 'Active'
+        status: p.status || 'Active',
+        code: p.code || '',
+        clientPhone: p.clientPhone || p.phone || '',
+        issueDate: p.issueDate || '',
+        expiryDate: p.expiryDate || '',
+        vehicleNumber: p.vehicleNumber || ''
       };
     });
 
