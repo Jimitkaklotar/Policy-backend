@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getDb } = require('../db');
+const { getDb, buildIdQuery } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 
 // GET /api/tasks
@@ -26,7 +26,12 @@ router.get('/', authMiddleware, async (req, res) => {
       return a.dueDate.localeCompare(b.dueDate);
     });
     
-    res.json(tasks);
+    const formattedTasks = tasks.map(t => ({
+      ...t,
+      id: t.id || String(t._id)
+    }));
+    
+    res.json(formattedTasks);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching tasks', error: error.message });
   }
@@ -62,7 +67,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
   const { title, dueDate, priority, status } = req.body;
   try {
     const db = getDb();
-    const task = await db.collection('tasks').findOne({ id: req.params.id });
+    const task = await db.collection('tasks').findOne(buildIdQuery(req.params.id));
     if (!task) {
       return res.status(404).json({ message: 'Task not found' });
     }
@@ -73,8 +78,8 @@ router.put('/:id', authMiddleware, async (req, res) => {
     if (priority !== undefined) updatedFields.priority = priority;
     if (status !== undefined) updatedFields.status = status;
 
-    await db.collection('tasks').updateOne({ id: req.params.id }, { $set: updatedFields });
-    const updatedTask = { ...task, ...updatedFields };
+    await db.collection('tasks').updateOne(buildIdQuery(req.params.id), { $set: updatedFields });
+    const updatedTask = { ...task, ...updatedFields, id: task.id || String(task._id) };
     
     // Remove _id for JSON output consistency
     delete updatedTask._id;
@@ -89,7 +94,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
 router.delete('/:id', authMiddleware, async (req, res) => {
   try {
     const db = getDb();
-    const result = await db.collection('tasks').deleteOne({ id: req.params.id });
+    const result = await db.collection('tasks').deleteOne(buildIdQuery(req.params.id));
     if (result.deletedCount === 0) {
       return res.status(404).json({ message: 'Task not found' });
     }

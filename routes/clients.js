@@ -4,7 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
-const { getDb } = require('../db');
+const { getDb, buildIdQuery } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 const { sendMailNotification } = require('../utils/mailer');
 
@@ -61,6 +61,7 @@ router.get('/', authMiddleware, async (req, res) => {
       const clientDocs = documents.filter(d => d.clientId === c.id);
       return {
         ...c,
+        id: c.id || String(c._id),
         documents: clientDocs
       };
     });
@@ -75,11 +76,11 @@ router.get('/', authMiddleware, async (req, res) => {
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
     const db = getDb();
-    const client = await db.collection('clients').findOne({ id: req.params.id });
+    const client = await db.collection('clients').findOne(buildIdQuery(req.params.id));
     if (!client) {
       return res.status(404).json({ message: 'Client not found' });
     }
-    res.json(client);
+    res.json({ ...client, id: client.id || String(client._id) });
   } catch (error) {
     res.status(500).json({ message: 'Error fetching client details', error: error.message });
   }
@@ -177,7 +178,7 @@ router.post('/', authMiddleware, upload.single('photo'), async (req, res) => {
 router.put('/:id', authMiddleware, upload.single('photo'), async (req, res) => {
   try {
     const db = getDb();
-    const client = await db.collection('clients').findOne({ id: req.params.id });
+    const client = await db.collection('clients').findOne(buildIdQuery(req.params.id));
     if (!client) {
       if (req.file) { try { fs.unlinkSync(req.file.path); } catch (e) {} }
       return res.status(404).json({ message: 'Client not found' });
@@ -217,8 +218,8 @@ router.put('/:id', authMiddleware, upload.single('photo'), async (req, res) => {
       updatedFields.followUps = [followUpDate];
     }
 
-    await db.collection('clients').updateOne({ id: req.params.id }, { $set: updatedFields });
-    const updatedClient = { ...client, ...updatedFields };
+    await db.collection('clients').updateOne(buildIdQuery(req.params.id), { $set: updatedFields });
+    const updatedClient = { ...client, ...updatedFields, id: client.id || String(client._id) };
 
     // Log activity
     const activity = {
@@ -265,19 +266,20 @@ router.put('/:id', authMiddleware, upload.single('photo'), async (req, res) => {
 router.delete('/:id', authMiddleware, async (req, res) => {
   try {
     const db = getDb();
-    const clientToDelete = await db.collection('clients').findOne({ id: req.params.id });
+    const clientToDelete = await db.collection('clients').findOne(buildIdQuery(req.params.id));
     if (!clientToDelete) {
       return res.status(404).json({ message: 'Client not found' });
     }
 
-    await db.collection('clients').deleteOne({ id: req.params.id });
-    await db.collection('policies').deleteMany({ clientId: req.params.id });
-    await db.collection('documents').deleteMany({ clientId: req.params.id });
+    await db.collection('clients').deleteOne(buildIdQuery(req.params.id));
+    const clientIds = [clientToDelete.id, String(clientToDelete._id), req.params.id].filter(Boolean);
+    await db.collection('policies').deleteMany({ clientId: { $in: clientIds } });
+    await db.collection('documents').deleteMany({ clientId: { $in: clientIds } });
 
     // Log activity
     const activity = {
       id: 'act-' + uuidv4(),
-      logText: `Client removed: ${clientToDelete.name}`,
+      logText: `Client removed: ${clientToDelete.name || clientToDelete.id}`,
       timestamp: new Date().toISOString(),
       type: 'danger'
     };

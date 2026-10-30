@@ -4,8 +4,21 @@ dns.setServers(['8.8.8.8', '1.1.1.1']);
 const fs = require('fs');
 const path = require('path');
 const bcrypt = require('bcryptjs');
-const { MongoClient } = require('mongodb');
+const { MongoClient, ObjectId } = require('mongodb');
 const { sendMailNotification } = require('./utils/mailer');
+
+// Helper to build a MongoDB query matching either custom string 'id' or Mongo '_id' (ObjectId)
+const buildIdQuery = (id) => {
+  if (!id) return { _id: null };
+  const strId = String(id).trim();
+  const queries = [{ id: strId }];
+  if (ObjectId.isValid(strId)) {
+    try {
+      queries.push({ _id: new ObjectId(strId) });
+    } catch (e) {}
+  }
+  return queries.length === 1 ? queries[0] : { $or: queries };
+};
 
 const UPLOADS_DIR = path.join(__dirname, 'uploads');
 
@@ -63,20 +76,23 @@ const connectDB = async () => {
       console.log(`Preloaded table '${table}': ${data.length} records`);
     }
 
-    // Force update clients and policies seed if old seeds exist or schemas are outdated
-    if (
-      dbCache.clients.some(c => c.id === 'c4' || c.id === 'c5' || c.id === 'c1' || c.id === 'c2') ||
-      dbCache.policies.some(p => !p.issueDate || p.clientId === 'c1' || p.clientId === 'c2')
-    ) {
-      console.log("[Seeder] Old seed data or outdated schema detected. Wiping clients and policies collections...");
-      await dbConnection.collection('clients').deleteMany({});
-      await dbConnection.collection('policies').deleteMany({});
-      dbCache.clients = [];
-      dbCache.policies = [];
-    }
+    // Check if database was already initialized to avoid re-seeding or resurrecting deleted user data
+    const metadataCol = dbConnection.collection('metadata');
+    const initDoc = await metadataCol.findOne({ key: 'database_initialized' });
 
-    // Seed default records if collections are empty
-    await seedDatabase();
+    if (!initDoc) {
+      console.log("[Seeder] First-time database setup: seeding initial records...");
+      await seedDatabase();
+      await metadataCol.updateOne(
+        { key: 'database_initialized' },
+        { $set: { value: true, initializedAt: new Date().toISOString() } },
+        { upsert: true }
+      );
+    } else {
+      console.log("[Database] Database already initialized. User data preserved.");
+      // Ensure required admin users exist without touching policies/clients/tasks
+      await ensureUsers();
+    }
 
     // Start background daily email notification scheduler
     startDailyAlertScheduler();
@@ -90,36 +106,75 @@ const readTable = (table) => {
   return dbCache[table] || [];
 };
 
-const writeTable = (table, data) => {
+const writeTable = async (table, data) => {
   // Update memory cache synchronously
   dbCache[table] = data;
 
-  // Asynchronously update MongoDB in background
+  // Asynchronously update MongoDB
   if (isConnected && dbConnection) {
-    const collection = dbConnection.collection(table);
-    // Replace all documents in collection with the new data array
-    collection.deleteMany({})
-      .then(() => {
-        if (data.length > 0) {
-          // Remove _id from objects to prevent insertion/duplicate-key conflicts
-          const cleanData = data.map(item => {
-            const copy = { ...item };
-            delete copy._id;
-            return copy;
-          });
-          return collection.insertMany(cleanData);
-        }
-      })
-      .then(() => {
-        console.log(`Successfully synced table '${table}' to MongoDB`);
-      })
-      .catch(error => {
-        console.error(`Error syncing table '${table}' to MongoDB:`, error);
-      });
+    try {
+      const collection = dbConnection.collection(table);
+      await collection.deleteMany({});
+      if (data.length > 0) {
+        // Remove _id from objects to prevent insertion/duplicate-key conflicts
+        const cleanData = data.map(item => {
+          const copy = { ...item };
+          delete copy._id;
+          return copy;
+        });
+        await collection.insertMany(cleanData);
+      }
+      console.log(`Successfully synced table '${table}' to MongoDB`);
+    } catch (error) {
+      console.error(`Error syncing table '${table}' to MongoDB:`, error);
+    }
   } else {
     console.warn(`MongoDB not connected. Changes to '${table}' are kept in memory only.`);
   }
   return true;
+};
+
+// Ensure default admin/staff accounts exist without affecting clients, policies, or tasks
+const ensureUsers = async () => {
+  if (!dbConnection) return;
+  const usersCol = dbConnection.collection('users');
+  const existingUsers = await usersCol.find({}).toArray();
+  const defaultPassword = await bcrypt.hash('admin123', 10);
+  const maheshPassword = await bcrypt.hash('Preet@13', 10);
+
+  if (!existingUsers.some(u => u.username === 'admin')) {
+    await usersCol.insertOne({
+      id: '1',
+      username: 'admin',
+      email: 'admin@trustassure.com',
+      password: defaultPassword,
+      name: 'John Doe',
+      role: 'Senior Broker',
+      avatar: 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
+    });
+  }
+  if (!existingUsers.some(u => u.username === 'alex')) {
+    await usersCol.insertOne({
+      id: '2',
+      username: 'alex',
+      email: 'alex@trustassure.com',
+      password: defaultPassword,
+      name: 'Alex Sterling',
+      role: 'Senior Broker',
+      avatar: 'https://images.unsplash.com/photo-1519085360753-af0119f7cbe7?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
+    });
+  }
+  if (!existingUsers.some(u => u.email === 'maheshnandwani13@gmail.com')) {
+    await usersCol.insertOne({
+      id: '3',
+      username: 'mahesh',
+      email: 'maheshnandwani13@gmail.com',
+      password: maheshPassword,
+      name: 'Mahesh Nandwani',
+      role: 'Senior Broker',
+      avatar: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=facearea&facepad=2&w=256&h=256&q=80'
+    });
+  }
 };
 
 // Seed initial database state if empty
@@ -571,5 +626,7 @@ module.exports = {
   getDb,
   readTable,
   writeTable,
-  seedDatabase
+  seedDatabase,
+  buildIdQuery,
+  ObjectId
 };

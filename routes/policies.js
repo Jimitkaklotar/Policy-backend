@@ -4,7 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
-const { getDb } = require('../db');
+const { getDb, buildIdQuery } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 const { sendMailNotification } = require('../utils/mailer');
 
@@ -52,6 +52,7 @@ router.get('/', authMiddleware, async (req, res) => {
 
       return {
         ...p,
+        id: p.id || String(p._id),
         clientEmail: (client && client.email) || p.clientEmail || '',
         clientPhone: (client && client.phone) || p.clientPhone || '',
         scheduleDocument: scheduleDoc || null
@@ -165,7 +166,7 @@ router.get('/', authMiddleware, async (req, res) => {
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
     const db = getDb();
-    const policy = await db.collection('policies').findOne({ id: req.params.id });
+    const policy = await db.collection('policies').findOne(buildIdQuery(req.params.id));
     if (!policy) {
       return res.status(404).json({ message: 'Policy not found' });
     }
@@ -173,14 +174,16 @@ router.get('/:id', authMiddleware, async (req, res) => {
     // Fetch client details
     let client = null;
     if (policy.clientId) {
-      client = await db.collection('clients').findOne({ id: policy.clientId });
+      client = await db.collection('clients').findOne(buildIdQuery(policy.clientId));
     }
 
     // Fetch related documents
-    const policyDocs = await db.collection('documents').find({ policyId: policy.id }).toArray();
+    const policyIds = [policy.id, String(policy._id), req.params.id].filter(Boolean);
+    const policyDocs = await db.collection('documents').find({ policyId: { $in: policyIds } }).toArray();
 
     res.json({
       ...policy,
+      id: policy.id || String(policy._id),
       clientDetails: client || (policy.clientName ? {
         id: policy.clientId || '',
         name: policy.clientName,
@@ -358,7 +361,7 @@ router.post('/', authMiddleware, upload.single('file'), async (req, res) => {
 router.put('/:id', authMiddleware, async (req, res) => {
   try {
     const db = getDb();
-    const oldPolicy = await db.collection('policies').findOne({ id: req.params.id });
+    const oldPolicy = await db.collection('policies').findOne(buildIdQuery(req.params.id));
     if (!oldPolicy) {
       return res.status(404).json({ message: 'Policy not found' });
     }
@@ -402,15 +405,15 @@ router.put('/:id', authMiddleware, async (req, res) => {
     if (clientPhone !== undefined) updatedFields.clientPhone = clientPhone;
     if (clientId !== undefined) updatedFields.clientId = clientId;
 
-    await db.collection('policies').updateOne({ id: req.params.id }, { $set: updatedFields });
-    const updatedPolicy = { ...oldPolicy, ...updatedFields };
+    await db.collection('policies').updateOne(buildIdQuery(req.params.id), { $set: updatedFields });
+    const updatedPolicy = { ...oldPolicy, ...updatedFields, id: oldPolicy.id || String(oldPolicy._id) };
 
     // Adjust client active policies count if status changed and linked to client
     if (status && oldPolicy.status !== status && oldPolicy.clientId) {
       if (status === 'Active' && oldPolicy.status !== 'Active') {
-        await db.collection('clients').updateOne({ id: oldPolicy.clientId }, { $inc: { activePoliciesCount: 1 } });
+        await db.collection('clients').updateOne(buildIdQuery(oldPolicy.clientId), { $inc: { activePoliciesCount: 1 } });
       } else if (status !== 'Active' && oldPolicy.status === 'Active') {
-        await db.collection('clients').updateOne({ id: oldPolicy.clientId }, { $inc: { activePoliciesCount: -1 } });
+        await db.collection('clients').updateOne(buildIdQuery(oldPolicy.clientId), { $inc: { activePoliciesCount: -1 } });
       }
     }
 
@@ -466,37 +469,40 @@ router.put('/:id', authMiddleware, async (req, res) => {
 router.delete('/:id', authMiddleware, async (req, res) => {
   try {
     const db = getDb();
-    const policyToDelete = await db.collection('policies').findOne({ id: req.params.id });
+    const policyToDelete = await db.collection('policies').findOne(buildIdQuery(req.params.id));
     if (!policyToDelete) {
       return res.status(404).json({ message: 'Policy not found' });
     }
 
-    await db.collection('policies').deleteOne({ id: req.params.id });
+    await db.collection('policies').deleteOne(buildIdQuery(req.params.id));
 
     // Decrement client active policies count if clientId exists
     if (policyToDelete.clientId && policyToDelete.status === 'Active') {
       await db.collection('clients').updateOne(
-        { id: policyToDelete.clientId },
+        buildIdQuery(policyToDelete.clientId),
         { $inc: { activePoliciesCount: -1 } }
       );
     }
 
     // Cleanup documents associated with policy
-    const policyDocs = await db.collection('documents').find({ policyId: req.params.id }).toArray();
-    await db.collection('documents').deleteMany({ policyId: req.params.id });
+    const policyIds = [policyToDelete.id, String(policyToDelete._id), req.params.id].filter(Boolean);
+    const policyDocs = await db.collection('documents').find({ policyId: { $in: policyIds } }).toArray();
+    await db.collection('documents').deleteMany({ policyId: { $in: policyIds } });
 
     // Delete physical files
     policyDocs.forEach(d => {
-      const fullPath = path.join(__dirname, '..', d.filePath);
-      if (fs.existsSync(fullPath)) {
-        try { fs.unlinkSync(fullPath); } catch (err) {}
+      if (d.filePath) {
+        const fullPath = path.join(__dirname, '..', d.filePath);
+        if (fs.existsSync(fullPath)) {
+          try { fs.unlinkSync(fullPath); } catch (err) {}
+        }
       }
     });
 
     // Log activity
     const activity = {
       id: 'act-' + uuidv4(),
-      logText: `Policy deleted: ${policyToDelete.policyNumber}`,
+      logText: `Policy deleted: ${policyToDelete.policyNumber || policyToDelete.id}`,
       timestamp: new Date().toISOString(),
       type: 'danger'
     };
@@ -516,7 +522,7 @@ router.post('/:id/documents/upload', authMiddleware, upload.single('file'), asyn
 
   try {
     const db = getDb();
-    const policy = await db.collection('policies').findOne({ id: req.params.id });
+    const policy = await db.collection('policies').findOne(buildIdQuery(req.params.id));
     if (!policy) {
       fs.unlinkSync(req.file.path);
       return res.status(404).json({ message: 'Policy not found' });
@@ -594,16 +600,16 @@ router.post('/:id/documents/upload', authMiddleware, upload.single('file'), asyn
 router.delete('/:id/documents/:docId', authMiddleware, async (req, res) => {
   try {
     const db = getDb();
-    const doc = await db.collection('documents').findOne({ id: req.params.docId, policyId: req.params.id });
+    const doc = await db.collection('documents').findOne(buildIdQuery(req.params.docId));
     if (!doc) {
       return res.status(404).json({ message: 'Document not found' });
     }
 
     const fullPath = path.join(__dirname, '..', doc.filePath);
-    await db.collection('documents').deleteOne({ id: req.params.docId });
+    await db.collection('documents').deleteOne(buildIdQuery(req.params.docId));
 
     // Delete physical file
-    if (fs.existsSync(fullPath)) {
+    if (doc.filePath && fs.existsSync(fullPath)) {
       try { fs.unlinkSync(fullPath); } catch (err) {}
     }
 
@@ -617,7 +623,7 @@ router.delete('/:id/documents/:docId', authMiddleware, async (req, res) => {
 router.get('/documents/download/:docId', async (req, res) => {
   try {
     const db = getDb();
-    const doc = await db.collection('documents').findOne({ id: req.params.docId });
+    const doc = await db.collection('documents').findOne(buildIdQuery(req.params.docId));
     if (!doc) {
       return res.status(404).json({ message: 'Document not found' });
     }

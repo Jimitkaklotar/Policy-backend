@@ -4,7 +4,7 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const { v4: uuidv4 } = require('uuid');
-const { getDb } = require('../db');
+const { getDb, buildIdQuery } = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 
 // Multer Storage Configuration
@@ -48,7 +48,11 @@ router.get('/', authMiddleware, async (req, res) => {
       const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
       return timeB - timeA;
     });
-    res.json(items);
+    const formattedItems = items.map(it => ({
+      ...it,
+      id: it.id || String(it._id)
+    }));
+    res.json(formattedItems);
   } catch (error) {
     res.status(500).json({ message: 'Error fetching vault data', error: error.message });
   }
@@ -153,7 +157,7 @@ router.post('/', authMiddleware, upload.any(), async (req, res) => {
 router.get('/download/:id', async (req, res) => {
   try {
     const db = getDb();
-    const item = await db.collection('vault').findOne({ id: req.params.id });
+    const item = await db.collection('vault').findOne(buildIdQuery(req.params.id));
     if (!item || !item.filePath) {
       return res.status(404).json({ message: 'File not found' });
     }
@@ -171,7 +175,7 @@ router.get('/download/:id', async (req, res) => {
 router.delete('/:id', authMiddleware, async (req, res) => {
   try {
     const db = getDb();
-    const item = await db.collection('vault').findOne({ id: req.params.id });
+    const item = await db.collection('vault').findOne(buildIdQuery(req.params.id));
     if (!item) {
       return res.status(404).json({ message: 'Vault document not found' });
     }
@@ -184,7 +188,7 @@ router.delete('/:id', authMiddleware, async (req, res) => {
       }
     }
 
-    await db.collection('vault').deleteOne({ id: req.params.id });
+    await db.collection('vault').deleteOne(buildIdQuery(req.params.id));
     res.json({ message: 'Vault document deleted successfully' });
   } catch (error) {
     res.status(500).json({ message: 'Error deleting from vault', error: error.message });
